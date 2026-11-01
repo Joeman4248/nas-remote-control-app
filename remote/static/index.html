@@ -38,21 +38,22 @@
     -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
   }
   #top { flex: none; }
-  #header { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  /* one text size everywhere; long lines wrap instead of running off the edge */
+  #header { overflow-wrap: anywhere; }
   #header .sep { color: var(--dim); }
-  #title { color: var(--title); }
+  #title { color: var(--title); overflow-wrap: anywhere; }
   .green { color: var(--green); } .red { color: var(--red); } .dim { color: var(--dim); font-weight: 400; }
   button {
     font: inherit; font-weight: 700; border: 0; border-radius: var(--radius); margin: 0; width: 100%;
     color: #fff; background: var(--btn); min-height: 56px; cursor: pointer;
-    touch-action: manipulation; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px;
+    touch-action: manipulation; overflow: hidden; overflow-wrap: anywhere; line-height: 1.15; padding: 4px 8px;
   }
   button.GOOD { background: var(--good); color: var(--ink); }
   button.DANGER, button.BAD { background: var(--danger); }
   button.bar { background: var(--bar); color: var(--fg); flex: none; min-height: 52px; }
   button.more { background: var(--bar); color: var(--fg); }
   button.pressed { background: var(--sel) !important; color: var(--ink) !important; }
-  #lines { flex: 0 1 auto; overflow-y: auto; white-space: pre-wrap; word-break: break-word; min-height: 0; }
+  #lines { flex: 0 1 auto; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 0; }
   #lines div { min-height: 1.35em; }
   body.text-only #lines { flex: 1 1 auto; }
   body:not(.text-only) #lines { max-height: 45%; }

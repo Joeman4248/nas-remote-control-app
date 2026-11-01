@@ -154,12 +154,9 @@ fn audit_report() -> Option<String> {
     std::fs::read_to_string(AUDIT_REPORT).ok()
 }
 
-/// The top line: claude · audit · docker.
+/// The top line: audit · docker, plus alerts.
+/// (Elevation isn't here: the main screen shows it.)
 pub fn header() -> Value {
-    let claude = match claude_status() {
-        None => line("claude-elevate: off", "green"),
-        Some((p, _, left)) => line(format!("claude-elevate: {p}{}", if left.is_empty() { String::new() } else { format!(" {left}") }), "red"),
-    };
     let audit = match audit_report() {
         Some(r) if r.trim().is_empty() => line("audit: clear", "green"),
         Some(_) => line("audit: findings", "red"),
@@ -167,7 +164,7 @@ pub fn header() -> Value {
     };
     let c = containers();
     let up = c.iter().filter(|c| c.healthy).count();
-    let mut parts = vec![claude, audit, line(format!("docker {up}/{}", c.len()), if up == c.len() { "green" } else { "red" })];
+    let mut parts = vec![audit, line(format!("docker {up}/{}", c.len()), if up == c.len() { "green" } else { "red" })];
     parts.extend(alerts().into_iter().map(|a| line(a, "red")));
     json!(parts)
 }
@@ -450,7 +447,7 @@ impl App {
     }
 
     fn docker_screen(&self) -> Value {
-        let mut buttons = vec![button("All Containers...", "BTN", "open:docker_all".into())];
+        let mut buttons = vec![button("All", "BTN", "open:docker_all".into())];
         buttons.extend(containers().iter().map(|c| {
             button(&c.name, if c.healthy { "GOOD" } else { "BAD" }, format!("open:container:{}", c.name))
         }));
@@ -531,7 +528,7 @@ impl App {
         let pane = remote_control_pane();
         let ok = |good: bool| if good { "green" } else { "red" };
         let mut lines = vec![if active {
-            line(format!("Service: running · up {} · {restarts} restarts", age(now().saturating_sub(since))), "green")
+            line(format!("Service: up {} · {restarts} restarts", age(now().saturating_sub(since))), "green")
         } else {
             line("Service: not running", "red")
         }];
@@ -555,7 +552,11 @@ impl App {
         if !errors.is_empty() {
             lines.push(line("", ""));
             lines.push(line("Recent messages:", "dim"));
-            lines.extend(errors[errors.len().saturating_sub(4)..].iter().map(|l| line(l.as_str(), "dim")));
+            // two lines at most each on a phone
+            lines.extend(errors[errors.len().saturating_sub(4)..].iter().map(|l| {
+                let short: String = l.chars().take(70).collect();
+                line(if short.len() < l.len() { format!("{short}…") } else { short }, "dim")
+            }));
         }
         // copied on the page itself, no round trip
         let mut buttons = vec![json!({"label": "Copy Attach Command", "style": "BTN", "copy": ATTACH})];
