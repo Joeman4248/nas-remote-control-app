@@ -1,0 +1,65 @@
+# Authelia for joe-nas: one user (joseph), passkey login, protecting
+# remote.joe-nas.net. Installed as /opt/docker/compose/authelia/config/configuration.yml.
+theme: dark
+
+server:
+  address: 'tcp://:9091/'
+
+log:
+  level: info
+
+authentication_backend:
+  password_reset:
+    disable: true
+  file:
+    path: /config/users.yml
+
+# Passkeys = Face ID on the iPhone. A passkey that verified you (Face ID)
+# counts as both factors, so passkey login alone satisfies two_factor below,
+# while the password alone isn't enough. Experimental in 4.39: the image is
+# pinned, so check this setting still exists before changing Authelia's version.
+webauthn:
+  disable: false
+  enable_passkey_login: true
+  experimental_enable_passkey_uv_two_factors: true
+  # Bitwarden doesn't report new credentials as passkeys; treat them as such
+  # (else passkey login fails with "Unable to find the credential")
+  experimental_enable_passkey_upgrade: true
+  display_name: joe-nas
+  attestation_conveyance_preference: none
+  selection_criteria:
+    discoverability: required
+    user_verification: required
+
+totp:
+  disable: true
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain: remote.joe-nas.net
+      policy: two_factor
+      subject: 'user:joseph'
+
+session:
+  cookies:
+    - domain: joe-nas.net
+      authelia_url: https://auth.joe-nas.net
+      default_redirection_url: https://remote.joe-nas.net
+      expiration: 1h
+      inactivity: 15m
+      remember_me: -1
+
+regulation:
+  max_retries: 5
+  find_time: 2m
+  ban_time: 15m
+
+storage:
+  local:
+    path: /config/db.sqlite3
+
+# Registration codes (to add the passkey) land in this file, readable by root only.
+notifier:
+  filesystem:
+    filename: /config/notification.txt

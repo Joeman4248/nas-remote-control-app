@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NAS">
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/apple-touch-icon.png">
+<title>NAS Remote</title>
+<style>
+  /* The old nas terminal app's layout on black, with iOS system colours.
+     Buttons are terminal-app sized and stack down the page, paging only
+     when the page is full. */
+  :root {
+    --bg: #000; --fg: #f2f2f7; --dim: #8e8e93;
+    --green: #30d158; --red: #ff453a; --title: #64d2ff;
+    --btn: #0a84ff; --good: #30d158; --danger: #ff453a; --sel: #64d2ff; --ink: #000;
+    --bar: #1c1c1e; --radius: 12px;
+    --gap: 10px; --row: 56px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
+  body {
+    /* pinned to the visible screen: Safari's bars change the height, and a page
+       that can scroll slides the header up under them */
+    position: fixed; inset: 0;
+    /* on a PC, a phone-width column in the middle */
+    max-width: 440px; margin: 0 auto;
+    color: var(--fg); font: 600 15px/1.35 ui-monospace, "SF Mono", Menlo, monospace;
+    display: flex; flex-direction: column; gap: var(--gap);
+    /* + room under the status bar: iOS blurs the strip just below it */
+    padding: calc(env(safe-area-inset-top) + 28px) max(12px, env(safe-area-inset-right))
+             max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  #top { flex: none; }
+  #header { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  #header .sep { color: var(--dim); }
+  #title { color: var(--title); }
+  .green { color: var(--green); } .red { color: var(--red); } .dim { color: var(--dim); font-weight: 400; }
+  button {
+    font: inherit; font-weight: 700; border: 0; border-radius: var(--radius); margin: 0; width: 100%;
+    color: #fff; background: var(--btn); min-height: 56px; cursor: pointer;
+    touch-action: manipulation; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px;
+  }
+  button.GOOD { background: var(--good); color: var(--ink); }
+  button.DANGER, button.BAD { background: var(--danger); }
+  button.bar { background: var(--bar); color: var(--fg); flex: none; min-height: 52px; }
+  button.more { background: var(--bar); color: var(--fg); }
+  button.pressed { background: var(--sel) !important; color: var(--ink) !important; }
+  #lines { flex: 0 1 auto; overflow-y: auto; white-space: pre-wrap; word-break: break-word; min-height: 0; }
+  #lines div { min-height: 1.35em; }
+  body.text-only #lines { flex: 1 1 auto; }
+  body:not(.text-only) #lines { max-height: 45%; }
+  #grid {
+    flex: 1 1 0; min-height: 0; display: grid; gap: var(--gap);
+    grid-template-columns: 1fr 1fr; grid-auto-rows: var(--row); align-content: start;
+  }
+  #grid .wide { grid-column: 1 / -1; }
+  #grid .middle { grid-column: 1 / -1; justify-self: center; width: max-content; min-width: calc(50% - var(--gap) / 2); max-width: 100%; padding: 0 20px; }  /* grows to fit a long label */
+  body.busy #grid button, body.busy #bar { opacity: .7; }
+</style>
+</head>
+<body>
+<div id="top"><div id="header"></div><div id="title"></div></div>
+<button id="bar" class="bar" hidden></button>
+<div id="lines"></div>
+<div id="grid"></div>
+<script>
+"use strict";
+// Screens come from the server (see remote/src/screens.rs). `stack` holds the
+// acts of the screens we navigated through, so Back re-opens the one below
+// with fresh data. Results, Yes/No questions and Working screens sit on top
+// of the stack without being part of it.
+const $ = id => document.getElementById(id);
+const ROW = 56;                // button height (matches --row)
+let stack = [];                // acts of open screens, last = current
+let view = null;               // what's on screen now
+let page = 0;                  // button page
+let pollToken = 0;             // bumps when we leave a Working screen
+let setupCode = "";            // typed on the Face ID setup screen
+
+async function post(act, confirmed = false, faceid = null) {
+  return call("/api/act", { method: "POST", headers: { "Content-Type": "application/json", "X-Nas-Remote": "1" },
+                            body: JSON.stringify({ act, confirmed, faceid }) });
+}
+
+async function call(url, opts = {}) {
+  document.body.classList.add("busy");
+  try {
+    const r = await fetch(url, { ...opts, credentials: "same-origin", redirect: "manual" });
+    if (r.type === "opaqueredirect" || r.status === 401 || r.status === 403) { location.reload(); return null; }
+    return await r.json();
+  } catch (e) {
+    location.reload();  // session ended: the reload goes through the passkey login again
+    return null;
+  } finally {
+    document.body.classList.remove("busy");
+  }
+}
+
+// ---- what to do with a response ----
+
+function show(r) {
+  if (!r) return;
+  if (r.type === "navigate") { location.href = r.url; return; }
+  if (r.header) renderHeader(r.header);
+  if (r.type === "screen") {
+    if (stack[stack.length - 1] === r.act) stack[stack.length - 1] = r.act; else stack.push(r.act);
+  } else if (r.type === "job") {
+    poll(r.id, ++pollToken);
+  }
+  view = r; page = 0;
+  render();
+}
+
+async function poll(id, token) {
+  while (token === pollToken) {
+    await new Promise(ok => setTimeout(ok, 400));
+    if (token !== pollToken) return;
+    const r = await fetch("/api/job?id=" + id, { credentials: "same-origin" }).then(x => x.json()).catch(() => null);
+    if (token !== pollToken) return;
+    if (r && r.type !== "running") { show(r); return; }
+  }
+}
+
+async function back() {
+  pollToken++;                                   // stop waiting; the job itself keeps running
+  if (view && view.quit_url) {                  // Quit on the main screen
+    window.close();                              // only works where a script opened the tab, never on iOS
+    setTimeout(() => { location.href = view.quit_url; }, 150);  // so sign out instead
+    return;
+  }
+  if (view && view.type === "screen") stack.pop();
+  const top = stack.pop() || "open:main";        // re-opened below, which pushes it again
+  show(await post(top));
+}
+
+async function press(btn) {
+  if (btn.page !== undefined) { page += btn.page; render(); return; }
+  if (btn.copy !== undefined) {
+    const label = btn.label;
+    try { await navigator.clipboard.writeText(btn.copy); btn.label = "Copied ✓"; } catch { btn.label = "Can't Copy"; }
+    render(); setTimeout(() => { btn.label = label; if (view && view.buttons && view.buttons.includes(btn)) render(); }, 1500);
+    return;
+  }
+  if (btn.faceid) { show(await faceId(view)); return; }
+  if (btn.code) { setupCode = (prompt("Setup code (sudo cat /var/lib/nas-remote/setup-code)") || "").trim(); render(); return; }
+  if (btn.register) { if (setupCode) show(await registerFaceId(view)); return; }
+  if (btn.yes) { show(await post(btn.act, true)); return; }
+  show(await post(btn.act));
+}
+
+// ---- the extra Face ID for Full grants (a passkey the remote checks itself) ----
+
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64u = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+const failed = (title, e) => ({ type: "result", title, lines: [["Cancelled", "red"], [String(e && e.message || e), "dim"]] });
+
+async function faceId(v) {
+  let cred;
+  try {
+    cred = await navigator.credentials.get({ publicKey: {
+      challenge: unb64u(v.challenge), rpId: v.rp, userVerification: "required", timeout: 60000,
+      allowCredentials: v.allow.map(id => ({ type: "public-key", id: unb64u(id) })) } });
+  } catch (e) { return failed(v.title, e); }
+  const r = cred.response;
+  return post(v.act, true, { id: b64u(cred.rawId), clientDataJSON: b64u(r.clientDataJSON),
+                             authenticatorData: b64u(r.authenticatorData), signature: b64u(r.signature) });
+}
+
+async function registerFaceId(v) {
+  let cred;
+  try {
+    cred = await navigator.credentials.create({ publicKey: {
+      challenge: unb64u(v.challenge), rp: { id: v.rp, name: "NAS Remote (Full grants)" },
+      user: { id: new TextEncoder().encode(v.user + "-full"), name: v.user, displayName: "joseph · Full grants" },
+      pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none", timeout: 60000,
+      authenticatorSelection: { userVerification: "required", residentKey: "preferred" } } });
+  } catch (e) { return failed(v.title, e); }
+  const code = setupCode; setupCode = "";
+  return call("/api/register", { method: "POST", headers: { "Content-Type": "application/json", "X-Nas-Remote": "1" },
+    body: JSON.stringify({ code, clientDataJSON: b64u(cred.response.clientDataJSON),
+                           attestationObject: b64u(cred.response.attestationObject) }) });
+}
+
+// ---- drawing ----
+
+function renderHeader(parts) {
+  const h = $("header"); h.textContent = "";
+  parts.forEach(([text, colour], i) => {
+    if (i) h.append(Object.assign(document.createElement("span"), { className: "sep", textContent: " · " }));
+    h.append(Object.assign(document.createElement("span"), { className: colour, textContent: text }));
+  });
+}
+
+function render() {
+  const v = view;
+  $("title").textContent = v.title || "";
+
+  const lines = $("lines"); lines.textContent = "";
+  for (const [text, colour] of (v.type === "job" ? [[v.msg, "dim"]] : v.lines || [])) {
+    lines.append(Object.assign(document.createElement("div"), { className: colour, textContent: text }));
+  }
+  lines.scrollTop = 0;
+
+  // buttons for this view
+  let buttons = [];
+  if (v.type === "screen") buttons = v.buttons;
+  if (v.type === "confirm") buttons = [{ label: v.yes, style: "DANGER", act: v.act, yes: true }];
+  if (v.type === "faceid") buttons = [{ label: v.yes, style: "DANGER", faceid: true }];
+  if (v.type === "register") buttons = [{ label: setupCode ? "Code Entered ✓" : "Enter Setup Code", style: "BTN", code: true },
+                                        { label: "Set Up Face ID", style: setupCode ? "GOOD" : "more", register: true }];
+  document.body.classList.toggle("text-only", buttons.length === 0);
+
+  // the top bar: Back (No on a question), or ▲ previous page on later pages
+  const backLabel = v.type === "confirm" || v.type === "faceid" ? "No" : v.type === "screen" ? v.back : "Back";
+  const bar = $("bar");
+  bar.hidden = !backLabel && page === 0;
+  bar.textContent = page > 0 ? "▲  Previous Page" : "⌫  " + backLabel;
+  bar.classList.remove("pressed");
+  bar.onclick = () => {
+    if (document.body.classList.contains("busy")) return;
+    if (page > 0) { page--; render(); } else back();
+  };
+
+  // page the grid when the buttons don't fit
+  const grid = $("grid"); grid.textContent = "";
+  grid.hidden = buttons.length === 0;
+  if (!buttons.length) return;
+  const gap = parseFloat(getComputedStyle(document.body).getPropertyValue("--gap"));
+  const fit = Math.max(1, Math.floor((grid.clientHeight + gap) / (ROW + gap)));
+  const rows = Math.ceil(buttons.length / 2);
+  let shown = buttons, more = false;
+  if (rows > fit) {
+    const perPage = Math.max(1, fit - 1) * 2;      // one row for ▼ more
+    const pages = Math.ceil(buttons.length / perPage);
+    page = Math.min(page, pages - 1);
+    shown = buttons.slice(page * perPage, (page + 1) * perPage);
+    more = page < pages - 1;
+  }
+  shown.forEach((b, i) => {
+    const el = makeButton(b.label, b.style, () => press(b));
+    if (i === shown.length - 1 && shown.length % 2) el.classList.add("middle");  // odd one out: centred
+    grid.append(el);
+  });
+  if (more) {
+    const m = makeButton("▼  More", "more", () => press({ page: 1 }));
+    m.classList.add("wide"); grid.append(m);
+  }
+}
+
+function makeButton(label, style, onPress) {
+  const b = document.createElement("button");
+  b.className = style; b.textContent = label;
+  wireTap(b, onPress);
+  return b;
+}
+
+// Light up on touch at once, act on release; a finger sliding off cancels.
+function wireTap(el, onPress) {
+  el.onpointerdown = () => el.classList.add("pressed");
+  el.onpointerleave = el.onpointercancel = () => el.classList.remove("pressed");
+  el.onclick = () => { if (!document.body.classList.contains("busy")) onPress(); };
+}
+// the top bar is one element that stays; render() sets what it does
+$("bar").onpointerdown = () => $("bar").classList.add("pressed");
+$("bar").onpointerleave = $("bar").onpointercancel = () => $("bar").classList.remove("pressed");
+
+addEventListener("resize", () => view && render());
+// #open:vpn etc. opens that screen first (bookmarks, and screenshots in scripts/remote-dev)
+post(decodeURIComponent(location.hash.slice(1)) || "open:main").then(show);
+</script>
+</body>
+</html>

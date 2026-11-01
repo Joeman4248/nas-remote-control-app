@@ -1,0 +1,122 @@
+#!/bin/sh
+# Install the web remote from claude's repo, after you've read the diff.
+# Installed as /usr/local/sbin/nas-remote-update.
+#
+#   sudo nas-remote-update          as joseph: show the diff, ask y/N, install
+#   nas-remote-update --stage       the web remote's Update app: copy and show the diff,
+#                                   last line "id: <sha256 of what was copied>"
+#   nas-remote-update --apply <id>  ...then after your Face ID: install the copy, only
+#                                   if it's still exactly <id>
+#
+#  1. copies remote/, buttons.toml, the remote's sudoers and its two
+#     service files from the repo into a root-only folder first, so what you review
+#     is exactly what gets installed
+#  2. builds as nasbuild (no sudo; building runs code from the Rust crates)
+#  3. installs everything root-owned (sudoers visudo-checked) and restarts the remote
+set -eu
+
+REPO=/home/claude/nas
+BUILD_HOME=/var/lib/nasbuild
+INSTALLED=/usr/local/share/nas-remote/src   # copy of the source last installed
+STATE=/var/lib/nas-remote-update            # root only: the staged copy, build log
+stage=$STATE/staged
+
+[ "$(id -u)" -eq 0 ] || { echo "run it with sudo" >&2; exit 1; }
+install -d -m 0700 -o root -g root "$STATE"
+exec 9>"$STATE/lock"
+flock -n 9 || { echo "Another update is running." >&2; exit 1; }
+
+tree_id() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-64); }
+
+# Copy the repo into $stage and write the diff to $STATE/diff.
+# Returns 1 when there's nothing new.
+do_stage() {
+  rm -rf "$stage" "$STATE/before"
+  mkdir -p "$stage"
+  cp -r "$REPO/remote/Cargo.toml" "$REPO/remote/Cargo.lock" "$REPO/remote/src" "$REPO/remote/static" "$stage/"
+  cp "$REPO/system/buttons.toml" "$REPO/system/remote/nas-remote.sudoers" \
+     "$REPO/system/remote/nas-remote.service" "$REPO/system/remote/nas-remote-fw.service" "$stage/"
+  mkdir "$STATE/before"   # what's installed now
+  [ -d "$INSTALLED" ] && cp -r "$INSTALLED/." "$STATE/before/"
+  diff -ruN "$STATE/before" "$stage" | sed "s#$stage#new#; s#$STATE/before#installed#" > "$STATE/diff" || true
+  [ -s "$STATE/diff" ]
+}
+
+# Build and install $stage. Output goes to the log; the summary to stdout.
+do_apply() {
+  log=$STATE/log
+  : > "$log"
+  visudo -cqf "$stage/nas-remote.sudoers" || { echo "The sudoers file is invalid; nothing installed."; exit 1; }
+
+  # build as nasbuild in its own folder; keep target/ so rebuilds are quick
+  work=$BUILD_HOME/work
+  mkdir -p "$work"
+  find "$work" -mindepth 1 -maxdepth 1 ! -name target -exec rm -rf {} +
+  cp -r "$stage/." "$work/"
+  chown -R nasbuild:nasbuild "$work"
+  echo "Building the web remote..."
+  if ! runuser -u nasbuild -- env -i HOME=$BUILD_HOME PATH=$BUILD_HOME/.cargo/bin:/usr/bin:/bin \
+       cargo build --release --locked --manifest-path "$work/Cargo.toml" >>"$log" 2>&1; then
+    echo "Build failed; nothing installed. Last lines:"; tail -n 15 "$log"; exit 1
+  fi
+  bin=$work/target/release/nas-remote
+  NAS_BUTTONS="$stage/buttons.toml" "$bin" --check || { echo "buttons.toml is invalid; nothing installed."; exit 1; }
+
+  install -m 0755 -o root -g root "$bin" /usr/local/bin/nas-remote
+  install -D -m 0644 -o root -g root "$stage/buttons.toml" /usr/local/share/nas/buttons.toml
+  if ! cmp -s "$stage/nas-remote.sudoers" /etc/sudoers.d/nas-remote; then
+    install -m 0440 -o root -g root "$stage/nas-remote.sudoers" /etc/sudoers.d/nas-remote
+    sudoers_changed=1
+  fi
+  for u in nas-remote.service nas-remote-fw.service; do
+    if ! cmp -s "$stage/$u" "/etc/systemd/system/$u"; then
+      install -m 0644 -o root -g root "$stage/$u" "/etc/systemd/system/$u"
+      units_changed=1
+    fi
+  done
+  rm -rf "$INSTALLED"
+  mkdir -p "$(dirname "$INSTALLED")"
+  cp -r "$stage" "$INSTALLED"
+  restarts=
+  if [ -n "${units_changed:-}" ]; then
+    systemctl daemon-reload
+    restarts=nas-remote-fw
+  fi
+  systemctl is-enabled -q nas-remote 2>/dev/null && restarts="$restarts nas-remote"
+  echo "Web remote installed."
+  [ -z "${sudoers_changed:-}${units_changed:-}" ] || echo "Its sudoers or services changed: Audit › Accept (sudo claude-audit --accept)."
+  if [ -n "$restarts" ]; then
+    if [ "${1:-}" = later ]; then
+      # the web remote asked: give it a moment to show this before it restarts
+      systemd-run --quiet --collect --on-active=3 /usr/bin/systemctl restart $restarts
+      echo "It restarts in a few seconds."
+    else
+      systemctl restart $restarts
+      echo "Restarted."
+    fi
+  fi
+}
+
+case "${1:-}" in
+  --stage)
+    [ $# -eq 1 ] || exit 2
+    if do_stage; then cat "$STATE/diff"; echo "id: $(tree_id "$stage")"; else echo "Already the newest version."; fi
+    ;;
+  --apply)
+    [ $# -eq 2 ] && printf '%s' "$2" | grep -qxE '[0-9a-f]{64}' || { echo "usage: --apply <id>" >&2; exit 2; }
+    [ -d "$stage" ] && [ "$(tree_id "$stage")" = "$2" ] \
+      || { echo "The code changed since you reviewed it; nothing installed. Open Update app again."; exit 1; }
+    do_apply later
+    rm -rf "$stage"
+    ;;
+  "")
+    do_stage || { echo "Already the newest version."; exit 0; }
+    if [ -t 1 ]; then less -R "$STATE/diff"; else cat "$STATE/diff"; fi
+    printf 'Install this? [y/N] '
+    read -r ok
+    [ "$ok" = y ] || [ "$ok" = Y ] || { echo "nothing changed"; exit 1; }
+    do_apply
+    rm -rf "$stage"
+    ;;
+  *) echo "usage: nas-remote-update [--stage | --apply <id>]" >&2; exit 2 ;;
+esac

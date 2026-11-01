@@ -1,0 +1,218 @@
+# Buttons for the web remote (remote.joe-nas.net). Installed root-owned at
+# /usr/local/share/nas/buttons.toml, so claude can propose changes here but
+# only joseph's reviewed install puts them in effect.
+#
+# Each [[button]]:
+#   screen   which screen it's on: main, docker_all, container, packages, vpn, claude_remote
+#   label    the text on the button
+#   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
+#   when     only show it when: "stopped" (container), "reboot_needed" (packages)
+#   confirm  lines for a Yes/No screen first; "yes" labels the Yes button
+#   run      a command, run with sudo; {name} is the container on its page.
+#            The web remote's sudoers (system/remote/nas-remote.sudoers) must
+#            allow exactly this command, or it fails with "a password is required".
+#   wait     the message while it runs
+#   show     "output" (default), "total" (only lines starting with "Total")
+#   does     instead of run: a flow built into the apps (open_docker,
+#            update_stack, restart_all, ...), where the confirm text can use
+#            {count}, {targets}, {project}, {list}
+#
+# Order here is the order on screen.
+
+# ---- main screen ----
+# Full grants (in Elevate Claude) and Update App also need the remote's own Face ID
+# check (they give claude root / install code).
+
+[[button]]
+screen = "main"
+label = "Elevate Claude"
+does = "grant"
+
+[[button]]
+screen = "main"
+label = "End Elevation"
+style = "GOOD"
+run = ["/usr/local/sbin/claude-elevate", "off"]
+
+[[button]]
+screen = "main"
+label = "Audit"
+does = "open_audit"
+
+[[button]]
+screen = "main"
+label = "Docker"
+does = "open_docker"
+
+[[button]]
+screen = "main"
+label = "Disk Health"
+does = "disk_health"
+wait = "Reading SMART data..."
+
+[[button]]
+screen = "main"
+label = "VPN"
+does = "open_vpn"
+
+[[button]]
+screen = "main"
+label = "Packages"
+does = "open_packages"
+
+[[button]]
+screen = "main"
+label = "Claude Remote"
+does = "open_claude_remote"
+
+[[button]]
+screen = "main"
+label = "Update App"
+does = "update_app"
+
+# ---- VPN ----
+
+[[button]]
+screen = "vpn"
+label = "Reconnect"
+style = "DANGER"
+does = "restart_container"
+confirm = ["Restart {targets}?", "Downloads pause for a minute while the VPN reconnects."]
+yes = "Reconnect"
+
+[[button]]
+screen = "vpn"
+label = "Restart Tailscale"
+style = "DANGER"
+run = ["systemctl", "restart", "tailscaled"]
+confirm = ["Restart Tailscale?", "If you're away from home, this page drops",
+           "for a few seconds until it reconnects."]
+yes = "Restart"
+wait = "Restarting Tailscale..."
+
+# ---- Claude remote (claude-remote.service) ----
+
+[[button]]
+screen = "claude_remote"
+label = "Show Screen"
+does = "remote_control_pane"
+
+[[button]]
+screen = "claude_remote"
+label = "Restart Remote Control"
+style = "DANGER"
+run = ["systemctl", "restart", "claude-remote"]
+confirm = ["Restart Remote Control?", "This ends every running claude session,",
+           "including one you're talking to now."]
+yes = "Restart"
+wait = "Restarting Remote Control..."
+
+# ---- Docker › All ----
+
+[[button]]
+screen = "docker_all"
+label = "Update All"
+does = "update_all"
+confirm = ["Pull new images for all {count} stacks and recreate",
+           "what changed? Stopped stacks stay stopped.",
+           "A Plex update cuts off anyone watching."]
+yes = "Update All"
+
+[[button]]
+screen = "docker_all"
+label = "Restart All"
+style = "DANGER"
+does = "restart_all"
+confirm = ["Restart all {count} running containers?", "Plex streams and downloads blip."]
+yes = "Restart All"
+
+[[button]]
+screen = "docker_all"
+label = "Prune Old Images"
+run = ["docker", "image", "prune", "-f"]
+confirm = ["Remove old image versions left behind by updates", "(dangling images)?"]
+yes = "Prune"
+wait = "Removing old images..."
+show = "total"
+
+[[button]]
+screen = "docker_all"
+label = "Prune Unused Images"
+style = "DANGER"
+run = ["docker", "image", "prune", "-f", "-a"]
+confirm = ["Remove every image no container uses, including",
+           "stopped stacks' images (jellyfin, old tailscale).",
+           "They re-download if you start those stacks again."]
+yes = "Prune"
+wait = "Removing unused images..."
+show = "total"
+
+[[button]]
+screen = "docker_all"
+label = "Start Stopped"
+style = "GOOD"
+does = "start_stopped"
+confirm = ["Start {list}?"]
+yes = "Start"
+
+# ---- a container's page ----
+
+[[button]]
+screen = "container"
+label = "Update"
+does = "update_stack"
+confirm = ["Pull the newest image for the {project} stack and recreate", "it if anything changed?"]
+yes = "Update"
+
+[[button]]
+screen = "container"
+label = "Restart"
+style = "DANGER"
+does = "restart_container"
+confirm = ["Restart {targets}?"]
+yes = "Restart"
+
+[[button]]
+screen = "container"
+label = "Logs"
+run = ["docker", "logs", "--tail", "60", "{name}"]
+wait = "Fetching logs..."
+
+[[button]]
+screen = "container"
+label = "Start"
+style = "GOOD"
+when = "stopped"
+run = ["docker", "start", "{name}"]
+wait = "Starting..."
+
+# ---- Packages ----
+
+[[button]]
+screen = "packages"
+label = "Upgrade All"
+style = "DANGER"
+does = "upgrade"
+confirm = ["Run omv-upgrade? (apt update + dist-upgrade, the", "safe way on OMV; keeps your configs)"]
+yes = "Upgrade"
+
+[[button]]
+screen = "packages"
+label = "Check Again"
+does = "check_updates"
+
+[[button]]
+screen = "packages"
+label = "Clean Up"
+does = "cleanup"
+confirm = ["Remove {count} packages nothing needs anymore?"]
+yes = "Remove"
+
+[[button]]
+screen = "packages"
+label = "Reboot"
+style = "DANGER"
+when = "reboot_needed"
+does = "reboot"
+confirm = ["Reboot the NAS now? Plex, downloads and this", "session drop; back in a few minutes."]
+yes = "Reboot"

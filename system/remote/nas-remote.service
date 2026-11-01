@@ -1,0 +1,24 @@
+# The web remote behind remote.joe-nas.net (see remote/ in the repo).
+# Installed as /etc/systemd/system/nas-remote.service.
+[Unit]
+Description=nas web remote (remote.joe-nas.net)
+After=network.target nas-remote-fw.service
+Requires=nas-remote-fw.service
+
+[Service]
+User=nasremote
+Group=nasremote
+# refuse to start without the firewall rule (+ runs this check as root)
+ExecStartPre=+/usr/sbin/iptables -C OUTPUT -o lo -p tcp --dport 8765 -m owner --uid-owner claude -j REJECT
+ExecStart=/usr/local/bin/nas-remote
+Environment=NAS_REMOTE_ADDR=127.0.0.1:8765 NAS_REMOTE_USER=joseph DEBIAN_FRONTEND=noninteractive
+# the Full grants passkey and its setup code: /var/lib/nas-remote, nasremote only (0700)
+StateDirectory=nas-remote
+StateDirectoryMode=0700
+Environment=NAS_REMOTE_STATE=/var/lib/nas-remote
+Restart=on-failure
+# a restart must not kill an update or upgrade a button started
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
