@@ -74,6 +74,22 @@ does = "open_claude_remote"
 
 [[button]]
 screen = "main"
+label = "Steam Stream"
+run = ["/usr/local/sbin/steam-mode", "stream"]
+confirm = ["Switch Steam to streaming mode?", "Stops monitor mode. Play via steam.joe-nas.net,", "Moonlight or Steam Link."]
+yes = "Switch"
+wait = "Switching Steam..."
+
+[[button]]
+screen = "main"
+label = "Steam Monitor"
+run = ["/usr/local/sbin/steam-mode", "monitor"]
+confirm = ["Switch Steam to monitor mode?", "Plug the monitor into the GPU first.", "Stops streaming mode."]
+yes = "Switch"
+wait = "Switching Steam..."
+
+[[button]]
+screen = "main"
 label = "Update App"
 does = "update_app"
 
