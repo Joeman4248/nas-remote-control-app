@@ -7,7 +7,8 @@
 #            backups, backup_usb, backup_local, backup_r2
 #   label    the text on the button
 #   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
-#   when     only show it when: "stopped" (container), "reboot_needed" (packages)
+#   when     only show it when: "stopped" (container), "reboot_needed" (packages),
+#            "idle" (backup_*: its backup isn't running)
 #   confirm  lines for a Yes/No screen first; "yes" labels the Yes button
 #   run      a command, run with sudo; {name} is the container on its page.
 #            The web remote's sudoers (system/remote/nas-remote.sudoers) must
@@ -132,12 +133,14 @@ wait = "Reading the USB SSD..."
 [[button]]
 screen = "backup_usb"
 label = "Check"
+when = "idle"
 run = ["/usr/local/sbin/backup-verify", "usb", "check"]
 wait = "Checking the repository..."
 
 [[button]]
 screen = "backup_usb"
 label = "Check Data"
+when = "idle"
 run = ["/usr/local/sbin/backup-verify", "usb", "check-data"]
 confirm = ["Read back every file in the USB backup?", "Takes several minutes; the result shows here",
            "if you keep this page open."]
@@ -147,6 +150,7 @@ wait = "Reading back the whole backup..."
 [[button]]
 screen = "backup_usb"
 label = "Back Up Now"
+when = "idle"
 style = "GOOD"
 run = ["systemctl", "start", "--no-block", "usb-backup"]
 confirm = ["Snapshot the OS drive to the USB SSD now?", "Runs in the background (a few minutes)."]
@@ -162,12 +166,14 @@ wait = "Reading the local repository..."
 [[button]]
 screen = "backup_local"
 label = "Check"
+when = "idle"
 run = ["/usr/local/sbin/backup-verify", "local", "check"]
 wait = "Checking the repository..."
 
 [[button]]
 screen = "backup_local"
 label = "Check Data"
+when = "idle"
 run = ["/usr/local/sbin/backup-verify", "local", "check-data"]
 confirm = ["Read back every file in the local backup?"]
 yes = "Check"
@@ -176,6 +182,7 @@ wait = "Reading back the whole backup..."
 [[button]]
 screen = "backup_local"
 label = "Back Up Now"
+when = "idle"
 style = "GOOD"
 run = ["systemctl", "start", "--no-block", "r2-backup"]
 confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in the background."]
@@ -191,12 +198,14 @@ wait = "Asking R2..."
 [[button]]
 screen = "backup_r2"
 label = "Check"
+when = "idle"
 run = ["/usr/local/sbin/backup-verify", "r2", "check"]
 wait = "Checking the repository..."
 
 [[button]]
 screen = "backup_r2"
 label = "Back Up Now"
+when = "idle"
 style = "GOOD"
 run = ["systemctl", "start", "--no-block", "r2-backup"]
 confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in the background."]

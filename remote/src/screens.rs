@@ -268,6 +268,26 @@ const BACKUP_REPOS: [(&str, &str, &[&str]); 3] = [
     ("r2", "R2", &["Same as Local, off-site in Cloudflare R2.", "r2-backup, nightly 03:17.",
                    "No Check Data here: it would download everything."]),
 ];
+/// The service that writes a repo: usb-backup for usb, r2-backup for local and r2.
+fn backup_unit(repo: &str) -> &'static str {
+    if repo == "usb" { "usb-backup" } else { "r2-backup" }
+}
+
+/// How long a backup service has been running, None when it isn't.
+fn backup_running(unit: &str) -> Option<u64> {
+    let s = plain(&["systemctl", "show", unit, "--timestamp=unix", "-p", "ActiveState", "-p", "ExecMainStartTimestamp"]);
+    let get = |k: &str| s.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").to_string();
+    (get("ActiveState=") == "activating")
+        .then(|| now().saturating_sub(get("ExecMainStartTimestamp=").trim_start_matches('@').parse().unwrap_or(0)))
+}
+
+/// Lines saying a backup is running and what waits for it.
+fn backup_busy_lines(unit: &str, secs: u64) -> Vec<Value> {
+    vec![line(format!("{unit} is running ({}).", age(secs)), ""),
+         line("Check and Back Up Now wait until it's done:", "dim"),
+         line("a check would lock the backup out.", "dim")]
+}
+
 const USB_BACKUP_UUID: &str = "f728a9c8-1c4b-4cfc-a444-4b12fee86ffb";
 
 /// Last run and next run of the two backup services, and the USB drive. Needs no sudo.
@@ -629,9 +649,15 @@ impl App {
         let Some((r, name, what)) = BACKUP_REPOS.iter().find(|(r, ..)| *r == repo) else {
             return result("Backups", vec![line(format!("No backup named {repo:?}."), "red")]);
         };
-        let lines = what.iter().map(|l| line(*l, "")).collect();
+        let mut lines: Vec<Value> = what.iter().map(|l| line(*l, "")).collect();
+        let unit = backup_unit(r);
+        let running = backup_running(unit);
+        if let Some(secs) = running {
+            lines.push(line("", ""));
+            lines.extend(backup_busy_lines(unit, secs));
+        }
         screen(&format!("open:backup:{r}"), &format!("Backups › {name}"), lines,
-               self.buttons(&format!("backup_{r}"), "", |_| true), Some("Back"))
+               self.buttons(&format!("backup_{r}"), "", |w| w == "idle" && running.is_none()), Some("Back"))
     }
 
     fn packages_screen(&self) -> Value {
@@ -756,6 +782,13 @@ impl App {
         };
         if (b.screen == "container" || !arg.is_empty()) && !containers().iter().any(|c| c.name == arg) {
             return result(&title, vec![line(format!("No container named {arg:?}."), "red")]);
+        }
+        // the page may be older than the backup's start
+        if let Some(repo) = b.screen.strip_prefix("backup_").filter(|_| b.when.as_deref() == Some("idle")) {
+            let unit = backup_unit(repo);
+            if let Some(secs) = backup_running(unit) {
+                return result(&title, backup_busy_lines(unit, secs));
+            }
         }
         let act = format!("btn:{i}:{arg}");
         // a Yes/No first, when the button has one and it hasn't been answered
