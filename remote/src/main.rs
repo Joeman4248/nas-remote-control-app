@@ -88,9 +88,9 @@ fn handle(stream: TcpStream, app: &screens::App, user: &str) {
             };
             with_header(json!({"type": "result", "title": "Face ID for Full", "lines": lines}))
         }
-        ("GET", "/api/job") => match req.query.get("id").and_then(|i| i.parse().ok()).map(|id| app.jobs.poll(id)) {
-            Some(Some(Some(done))) => with_header(done),
-            Some(Some(None)) => json!({"type": "running"}),
+        ("GET", "/api/job") => match req.query.get("id").and_then(|i| i.parse().ok()).map(|id| (id, app.jobs.poll(id))) {
+            Some((_, Some(Some(done)))) => with_header(done),
+            Some((id, Some(None))) => json!({"type": "running", "lines": app.jobs.lines(id)}),
             _ => with_header(json!({"type": "result", "title": "Gone",
                                     "lines": [["That job's result is no longer here.", "dim"]]})),
         },

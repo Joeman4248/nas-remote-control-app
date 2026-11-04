@@ -15,7 +15,6 @@
 #            allow exactly this command, or it fails with "a password is required".
 #   wait     the message while it runs
 #   show     "output" (default), "total" (only lines starting with "Total")
-#   done     the message when the command prints nothing
 #   does     instead of run: a flow built into the apps (open_docker,
 #            update_stack, restart_all, ...), where the confirm text can use
 #            {count}, {targets}, {project}, {list}
@@ -117,6 +116,7 @@ wait = "Restarting Remote Control..."
 
 # ---- Backups (restic: usb-backup, r2-backup) ----
 # The checks go through backup-verify (read-only: it can't restore, forget or prune).
+# Command output shows live while it runs; Back Up Now follows the backup's journal.
 
 [[button]]
 screen = "backups"
@@ -152,10 +152,9 @@ screen = "backup_usb"
 label = "Back Up Now"
 when = "idle"
 style = "GOOD"
-run = ["systemctl", "start", "--no-block", "usb-backup"]
+does = "backup_now"
 confirm = ["Snapshot the OS drive to the USB SSD now?", "Runs in the background (a few minutes)."]
 yes = "Back Up"
-done = "Started. Backups shows it running."
 
 [[button]]
 screen = "backup_local"
@@ -184,10 +183,9 @@ screen = "backup_local"
 label = "Back Up Now"
 when = "idle"
 style = "GOOD"
-run = ["systemctl", "start", "--no-block", "r2-backup"]
+does = "backup_now"
 confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in the background."]
 yes = "Back Up"
-done = "Started. Backups shows it running."
 
 [[button]]
 screen = "backup_r2"
@@ -207,10 +205,9 @@ screen = "backup_r2"
 label = "Back Up Now"
 when = "idle"
 style = "GOOD"
-run = ["systemctl", "start", "--no-block", "r2-backup"]
+does = "backup_now"
 confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in the background."]
 yes = "Back Up"
-done = "Started. Backups shows it running."
 
 # ---- Docker › All ----
 

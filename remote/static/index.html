@@ -126,6 +126,7 @@ async function poll(id, token) {
     const r = await fetch("/api/job?id=" + id, { credentials: "same-origin" }).then(x => x.json()).catch(() => null);
     if (token !== pollToken) return;
     if (r && r.type !== "running") { show(r); return; }
+    if (r && r.lines && r.lines.length) { view.live = r.lines; render(); }   // output so far
   }
 }
 
@@ -204,10 +205,11 @@ function render() {
   $("title").textContent = v.title || "";
 
   const lines = $("lines"); lines.textContent = "";
-  for (const [text, colour] of (v.type === "job" ? [[v.msg, "dim"]] : v.lines || [])) {
+  const job = v.type === "job" ? [[v.msg, "dim"], ...(v.live || []).map(l => [l, ""])] : null;
+  for (const [text, colour] of (job || v.lines || [])) {
     lines.append(Object.assign(document.createElement("div"), { className: colour, textContent: text }));
   }
-  lines.scrollTop = 0;
+  lines.scrollTop = job ? lines.scrollHeight : 0;   // a job's newest output stays in view
 
   // buttons for this view
   let buttons = [];

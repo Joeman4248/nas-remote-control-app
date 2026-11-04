@@ -8,11 +8,12 @@
 //!   {type: "faceid",  title, lines, yes, act, challenge, allow}  Yes runs a passkey check (Full grants)
 //!   {type: "register", title, lines, challenge, user}    set up that passkey (needs the setup code)
 //! Acts: "open:<screen>[:<arg>]", "btn:<index in buttons.toml>:<container or empty>",
-//! "grant:<profile>:<minutes>", "audit:accept", "update:<id of the reviewed copy>".
+//! "grant:<profile>:<minutes>", "audit:accept", "update:<id of the reviewed copy>",
+//! "watch:<backup unit>".
 
 use crate::config::{fill, Button, Config};
-use crate::jobs::Jobs;
-use crate::sh::{lines, plain, sh, sh_as};
+use crate::jobs::{Jobs, Live};
+use crate::sh::{lines, plain, sh, sh_as, sh_live};
 use crate::stepup::{StepUp, RP_ID};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -285,9 +286,10 @@ fn backup_running(unit: &str) -> Option<u64> {
 fn backup_busy_lines(unit: &str, secs: u64) -> Vec<Value> {
     vec![line(format!("{unit} is running ({}).", age(secs)), ""),
          line("Check and Back Up Now wait until it's done:", "dim"),
-         line("a check would lock the backup out.", "dim")]
+         line("a check would lock the backup out. Watch shows it live.", "dim")]
 }
 
+const BACKUP_UNITS: [(&str, &str); 2] = [("r2-backup", "R2 + Local"), ("usb-backup", "USB SSD")];
 const USB_BACKUP_UUID: &str = "f728a9c8-1c4b-4cfc-a444-4b12fee86ffb";
 
 /// Last run and next run of the two backup services, and the USB drive. Needs no sudo.
@@ -296,24 +298,8 @@ fn backup_lines() -> Vec<Value> {
         .unwrap_or_default();
     let t = now();
     let mut out = vec![];
-    for (unit, name) in [("r2-backup", "R2 + Local"), ("usb-backup", "USB SSD")] {
-        let s = plain(&["systemctl", "show", unit, "--timestamp=unix", "-p", "ActiveState", "-p", "Result",
-                        "-p", "ExecMainStatus", "-p", "ExecMainStartTimestamp", "-p", "ExecMainExitTimestamp",
-                        "-p", "ConditionResult", "-p", "ConditionTimestamp"]);
-        let get = |k: &str| s.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").to_string();
-        let ts = |k: &str| get(k).trim_start_matches('@').parse::<u64>().unwrap_or(0);
-        let (start, exit, cond) = (ts("ExecMainStartTimestamp="), ts("ExecMainExitTimestamp="), ts("ConditionTimestamp="));
-        let (text, colour) = if get("ActiveState=") == "activating" {
-            (format!("running for {}", age(t.saturating_sub(start))), "")
-        } else if get("ConditionResult=") == "no" && cond > 0 {
-            (format!("skipped {} ago (drive not mounted)", age(t.saturating_sub(cond))), "red")
-        } else if start == 0 {
-            ("no run since boot".into(), "dim")
-        } else if get("Result=") != "success" {
-            (format!("FAILED {} ago (exit {})", age(t.saturating_sub(exit.max(start))), get("ExecMainStatus=")), "red")
-        } else {
-            (format!("ok {} ago, took {}", age(t.saturating_sub(exit)), age(exit.saturating_sub(start))), "green")
-        };
+    for (unit, name) in BACKUP_UNITS {
+        let (text, colour) = backup_status(unit);
         out.push(line(format!("{name}: {text}"), colour));
         if unit == "usb-backup" {
             let mnt = plain(&["findmnt", "-rn", "-S", &format!("UUID={USB_BACKUP_UUID}"), "-o", "AVAIL,SIZE"]);
@@ -328,6 +314,61 @@ fn backup_lines() -> Vec<Value> {
         }, if next == 0 { "red" } else { "dim" }));
     }
     out
+}
+
+/// A backup service's last or current run, and its colour. Needs no sudo.
+fn backup_status(unit: &str) -> (String, &'static str) {
+    let t = now();
+    let s = plain(&["systemctl", "show", unit, "--timestamp=unix", "-p", "ActiveState", "-p", "Result",
+                    "-p", "ExecMainStatus", "-p", "ExecMainStartTimestamp", "-p", "ExecMainExitTimestamp",
+                    "-p", "ConditionResult", "-p", "ConditionTimestamp"]);
+    let get = |k: &str| s.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").to_string();
+    let ts = |k: &str| get(k).trim_start_matches('@').parse::<u64>().unwrap_or(0);
+    let (start, exit, cond) = (ts("ExecMainStartTimestamp="), ts("ExecMainExitTimestamp="), ts("ConditionTimestamp="));
+    if get("ActiveState=") == "activating" {
+        (format!("running for {}", age(t.saturating_sub(start))), "")
+    } else if get("ConditionResult=") == "no" && cond > 0 {
+        (format!("skipped {} ago (drive not mounted)", age(t.saturating_sub(cond))), "red")
+    } else if start == 0 {
+        ("no run since boot".into(), "dim")
+    } else if get("Result=") != "success" && get("ExecMainStatus=") == "3" {
+        // restic: snapshot saved, but some files couldn't be read
+        (format!("partly saved {} ago (unreadable files)", age(t.saturating_sub(exit))), "red")
+    } else if get("Result=") != "success" {
+        (format!("FAILED {} ago (exit {})", age(t.saturating_sub(exit.max(start))), get("ExecMainStatus=")), "red")
+    } else {
+        (format!("ok {} ago, took {}", age(t.saturating_sub(exit)), age(exit.saturating_sub(start))), "green")
+    }
+}
+
+/// The current (or last) run's journal, from its "Starting ..." line on.
+fn backup_log(unit: &str) -> Vec<String> {
+    let out = lines(&sh(&["journalctl", "-u", unit, "-n", "15", "-o", "cat", "--no-pager"]));
+    let from = out.iter().rposition(|l| l.starts_with("Starting ")).unwrap_or(0);
+    out[from..].to_vec()
+}
+
+/// Follow a backup service until it finishes: its journal is the live lines.
+/// restic in the backup scripts prints progress every 10 s (RESTIC_PROGRESS_FPS).
+fn watch_backup(title: String, unit: &str, live: Live) -> Value {
+    let start = now();
+    let mut seen = false;
+    loop {
+        let running = backup_running(unit).is_some();
+        seen |= running;
+        let log = backup_log(unit);
+        if !running && (seen || now() - start > 5) {
+            let (text, colour) = backup_status(unit);
+            let mut l = vec![line(text, colour), line("", "")];
+            l.extend(log.iter().map(|x| line(x.as_str(), "")));
+            return result(&title, l);
+        }
+        *live.lock().unwrap() = log;
+        if now() - start > 4 * 3600 {
+            return result(&title, vec![line("Still running after 4 hours; stopped watching.", "red")]);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 /// SMART summary per drive, plus the array and the SSD cache.
@@ -487,6 +528,7 @@ impl App {
             ["open", "claude_remote"] => self.claude_remote_screen(),
             ["open", "backups"] => self.backups_screen(),
             ["open", "backup", repo] => self.backup_repo_screen(repo),
+            ["watch", unit] => self.watch(unit),
             ["btn", i, arg] => match i.parse::<usize>().ok().and_then(|i| self.cfg.buttons.get(i).map(|b| (i, b))) {
                 Some((i, b)) => self.press(i, b, arg, confirmed),
                 _ => result("Error", vec![line("No such button.", "red")]),
@@ -641,6 +683,11 @@ impl App {
     fn backups_screen(&self) -> Value {
         let mut buttons: Vec<Value> = BACKUP_REPOS.iter()
             .map(|(r, name, ..)| button(name, "BTN", format!("open:backup:{r}"))).collect();
+        for (unit, name) in BACKUP_UNITS {
+            if backup_running(unit).is_some() {
+                buttons.push(button(&format!("Watch {name}"), "GOOD", format!("watch:{unit}")));
+            }
+        }
         buttons.extend(self.buttons("backups", "", |_| true));
         screen("open:backups", "Backups", backup_lines(), buttons, Some("Back"))
     }
@@ -652,12 +699,24 @@ impl App {
         let mut lines: Vec<Value> = what.iter().map(|l| line(*l, "")).collect();
         let unit = backup_unit(r);
         let running = backup_running(unit);
+        let mut buttons = vec![];
         if let Some(secs) = running {
             lines.push(line("", ""));
             lines.extend(backup_busy_lines(unit, secs));
+            buttons.push(button("Watch", "GOOD", format!("watch:{unit}")));
         }
-        screen(&format!("open:backup:{r}"), &format!("Backups › {name}"), lines,
-               self.buttons(&format!("backup_{r}"), "", |w| w == "idle" && running.is_none()), Some("Back"))
+        buttons.extend(self.buttons(&format!("backup_{r}"), "", |w| w == "idle" && running.is_none()));
+        screen(&format!("open:backup:{r}"), &format!("Backups › {name}"), lines, buttons, Some("Back"))
+    }
+
+    /// A backup service's run, live, until it finishes.
+    fn watch(&self, unit: &str) -> Value {
+        let Some((unit, name)) = BACKUP_UNITS.iter().find(|(u, _)| *u == unit) else {
+            return result("Backups", vec![line(format!("No backup named {unit:?}."), "red")]);
+        };
+        let title = format!("Backups › {name}");
+        json!({"type": "job", "title": title, "msg": format!("{unit} running..."),
+               "id": self.jobs.start_live(move |live| watch_backup(title, unit, live))})
     }
 
     fn packages_screen(&self) -> Value {
@@ -804,6 +863,9 @@ impl App {
         let job = |msg: &str, work: Box<dyn FnOnce() -> Value + Send>| -> Value {
             json!({"type": "job", "id": self.jobs.start(work), "title": title, "msg": msg})
         };
+        let live_job = |msg: &str, work: Box<dyn FnOnce(Live) -> Value + Send>| -> Value {
+            json!({"type": "job", "id": self.jobs.start_live(work), "title": title, "msg": msg})
+        };
 
         let Some(does) = b.does.as_deref() else {
             // a plain command from buttons.toml
@@ -812,15 +874,11 @@ impl App {
             }
             let cmd: Vec<String> = b.run.iter().map(|a| fill(a, &[("name", arg)])).collect();
             let (show_total, t) = (b.show.as_deref() == Some("total"), title.clone());
-            let done = b.done.clone();
-            return job(b.wait.as_deref().unwrap_or("Working..."), Box::new(move || {
+            return live_job(b.wait.as_deref().unwrap_or("Working..."), Box::new(move |live| {
                 let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
-                let out = sh(&args);
+                let out = sh_live(&args, &live);
                 let total: Vec<Value> = out.lines().filter(|l| l.starts_with("Total")).map(|l| line(l, "")).collect();
-                match &done {
-                    Some(d) if out.is_empty() => result(&t, vec![line(d.as_str(), "green")]),
-                    _ => result(&t, if show_total && !total.is_empty() { total } else { plain_lines(&out) }),
-                }
+                result(&t, if show_total && !total.is_empty() { total } else { plain_lines(&out) })
             }));
         };
 
@@ -832,6 +890,13 @@ impl App {
             "open_vpn" => self.vpn_screen(),
             "open_claude_remote" => self.claude_remote_screen(),
             "open_backups" => self.backups_screen(),
+            "backup_now" => {
+                let unit = backup_unit(b.screen.strip_prefix("backup_").unwrap_or(""));
+                ask(&[], vec![]).unwrap_or_else(|| match sh(&["systemctl", "start", "--no-block", unit]) {
+                    out if out.is_empty() => self.watch(unit),
+                    out => result(&title, plain_lines(&out)),
+                })
+            }
             "remote_control_pane" => result(&title, remote_control_pane().iter().map(|l| line(l.as_str(), "")).collect()),
             "disk_health" => job(b.wait.as_deref().unwrap_or("Working..."), Box::new(move || result(&t, disk_health()))),
             "grant" => self.grant_screen(),
@@ -875,8 +940,8 @@ impl App {
                 })
             }
             "upgrade" => ask(&[], vec![]).unwrap_or_else(|| {
-                job("Upgrading... this can take a few minutes", Box::new(move || {
-                    let out = lines(&sh(&["omv-upgrade"]));
+                live_job("Upgrading... this can take a few minutes", Box::new(move |live| {
+                    let out = lines(&sh_live(&["omv-upgrade"], &live));
                     let mut l: Vec<Value> = out.iter().filter(|l| l.contains(" upgraded,")).map(|l| line(l, "")).collect();
                     l.push(line("", ""));
                     l.extend(out[out.len().saturating_sub(30)..].iter().map(|x| line(x, "")));

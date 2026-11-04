@@ -22,7 +22,6 @@ pub struct Button {
     pub run: Vec<String>,
     pub wait: Option<String>,
     pub show: Option<String>,
-    pub done: Option<String>,
     pub does: Option<String>,
 }
 

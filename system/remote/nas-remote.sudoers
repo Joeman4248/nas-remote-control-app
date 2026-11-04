@@ -1,7 +1,7 @@
 # The web remote (nas-remote, user nasremote) may run exactly these commands
 # as root, nothing else. Every button in buttons.toml must fit one of them.
 # Installed as /etc/sudoers.d/nas-remote (0440).
-Defaults:nasremote !requiretty, env_keep += "DEBIAN_FRONTEND"
+Defaults:nasremote !requiretty, env_keep += "DEBIAN_FRONTEND RESTIC_PROGRESS_FPS"
 
 Cmnd_Alias NR_DOCKER = /usr/bin/docker ps -a --format *, /usr/bin/docker inspect -f *, \
                        /usr/bin/docker logs --tail 60 *, /usr/bin/docker restart *, \
@@ -17,10 +17,12 @@ Cmnd_Alias NR_SYS    = /usr/bin/systemctl reboot, /usr/bin/systemctl restart tai
                        /usr/local/sbin/claude-elevate off, /usr/local/sbin/claude-elevate status, \
                        /usr/bin/journalctl -t claude-elevate -n 30 -o short-iso --no-pager
 
-# Backups: start the nightly units early, read their log, and backup-verify's
+# Backups: start the nightly units early, read their log (and follow one while it runs), and backup-verify's
 # read-only checks (no check-data for r2).
 Cmnd_Alias NR_BACKUP = /usr/bin/systemctl start --no-block r2-backup, /usr/bin/systemctl start --no-block usb-backup, \
                        /usr/bin/journalctl -u r2-backup -u usb-backup -n 40 -o short-iso --no-pager, \
+                       /usr/bin/journalctl -u r2-backup -n 15 -o cat --no-pager, \
+                       /usr/bin/journalctl -u usb-backup -n 15 -o cat --no-pager, \
                        /usr/local/sbin/backup-verify usb snapshots, /usr/local/sbin/backup-verify usb check, \
                        /usr/local/sbin/backup-verify usb check-data, /usr/local/sbin/backup-verify local snapshots, \
                        /usr/local/sbin/backup-verify local check, /usr/local/sbin/backup-verify local check-data, \
