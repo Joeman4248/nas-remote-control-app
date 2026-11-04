@@ -103,6 +103,13 @@ pub fn containers() -> Vec<Container> {
     rows
 }
 
+/// Which Steam container runs (see steam-mode): "steam_stream" (steam2),
+/// "steam_monitor" (steam) or "steam_off".
+fn steam_mode() -> &'static str {
+    let running = |n: &str| sh(&["docker", "inspect", "-f", "{{.State.Running}}", n]).trim() == "true";
+    if running("steam2") { "steam_stream" } else if running("steam") { "steam_monitor" } else { "steam_off" }
+}
+
 /// (profile or None, until "19:05", left "9min") from claude-elevate status, whose
 /// second line is the timer: "Thu 2026-10-29 19:05:01 CDT  9min  <last run or ->".
 fn claude_status() -> Option<(String, String, String)> {
@@ -569,7 +576,8 @@ impl App {
             ],
         };
         // Quit on the web = sign out (the page can't close itself)
-        let mut v = screen("open:main", "joe-nas", lines, self.buttons("main", "", |_| true), Some("Quit"));
+        let steam = steam_mode();
+        let mut v = screen("open:main", "joe-nas", lines, self.buttons("main", "", |w| !w.starts_with("steam_") || w == steam), Some("Quit"));
         v["quit_url"] = json!(SIGN_OUT_URL);
         v
     }

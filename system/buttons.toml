@@ -8,6 +8,7 @@
 #   label    the text on the button
 #   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
 #   when     only show it when: "stopped" or "running" (container), "reboot_needed" (packages),
+#            "steam_stream" / "steam_monitor" / "steam_off" (main: which Steam container runs),
 #            "idle" (backup_*: its backup isn't running)
 #   confirm  lines for a Yes/No screen first; "yes" labels the Yes button
 #   run      a command, run with sudo; {name} is the container on its page.
@@ -72,9 +73,22 @@ screen = "main"
 label = "Claude Remote"
 does = "open_claude_remote"
 
+# Steam: one button showing the current mode; tapping switches to the other
 [[button]]
 screen = "main"
-label = "Steam Stream"
+label = "Steam: Stream"
+style = "GOOD"
+when = "steam_stream"
+run = ["/usr/local/sbin/steam-mode", "monitor"]
+confirm = ["Switch Steam to monitor mode?", "Plug the monitor into the GPU first.", "Stops streaming mode."]
+yes = "Switch"
+wait = "Switching Steam..."
+
+[[button]]
+screen = "main"
+label = "Steam: Monitor"
+style = "GOOD"
+when = "steam_monitor"
 run = ["/usr/local/sbin/steam-mode", "stream"]
 confirm = ["Switch Steam to streaming mode?", "Stops monitor mode. Play via steam.joe-nas.net,", "Moonlight or Steam Link."]
 yes = "Switch"
@@ -82,11 +96,13 @@ wait = "Switching Steam..."
 
 [[button]]
 screen = "main"
-label = "Steam Monitor"
-run = ["/usr/local/sbin/steam-mode", "monitor"]
-confirm = ["Switch Steam to monitor mode?", "Plug the monitor into the GPU first.", "Stops streaming mode."]
-yes = "Switch"
-wait = "Switching Steam..."
+label = "Steam: Off"
+style = "OFF"
+when = "steam_off"
+run = ["/usr/local/sbin/steam-mode", "stream"]
+confirm = ["Start Steam in streaming mode?", "Play via steam.joe-nas.net, Moonlight or Steam Link."]
+yes = "Start"
+wait = "Starting Steam..."
 
 [[button]]
 screen = "main"
