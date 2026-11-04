@@ -1,6 +1,6 @@
 #!/bin/sh
 # One-time setup for the web remote (remote.joe-nas.net) and its passkey login
-# (auth.joe-nas.net). Run as joseph:  sudo sh /home/claude/nas/system/remote/setup.sh
+# (remote.joe-nas.net/auth). Run as joseph:  sudo sh /home/claude/nas/system/remote/setup.sh
 #
 # In order, stopping at the first error:
 #   1. nasremote user + its sudoers allowlist (checked with visudo)
@@ -84,7 +84,7 @@ step "4. build and install the remote (review the code it shows you)"
 /usr/local/sbin/nas-remote-update
 systemctl enable --now nas-remote
 
-step "5. Caddy: add auth.joe-nas.net and remote.joe-nas.net"
+step "5. Caddy: add remote.joe-nas.net (Authelia at /auth)"
 mkdir -p "$BACKUP"
 if ! omv-rpc -u admin Compose getFile '{"uuid":"2cd0ea95-1cf9-4937-a645-c138ad98091d"}' | grep -q '@remote'; then
   python3 "$REPO/remote/caddy-add-remote.py" "$BACKUP" --apply
@@ -99,7 +99,7 @@ step "done"
 cat <<EOF
 Next:
   1. sudo claude-audit --accept     (new sudoers file and services)
-  2. On the iPhone, open https://auth.joe-nas.net, sign in as joseph with the
+  2. On the iPhone, open https://remote.joe-nas.net, sign in as joseph with the
      password, then Register a passkey. Authelia asks for a one-time code; see it with:
        sudo tail -n 20 $CFG/notification.txt
   3. Open https://remote.joe-nas.net, Share → Add to Home Screen.

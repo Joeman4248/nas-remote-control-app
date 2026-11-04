@@ -123,7 +123,11 @@ async function poll(id, token) {
   while (token === pollToken) {
     await new Promise(ok => setTimeout(ok, 400));
     if (token !== pollToken) return;
-    const r = await fetch("/api/job?id=" + id, { credentials: "same-origin" }).then(x => x.json()).catch(() => null);
+    const res = await fetch("/api/job?id=" + id, { credentials: "same-origin", redirect: "manual" }).catch(() => null);
+    if (token !== pollToken) return;
+    // session ended: stop polling and go through the passkey login again
+    if (res && (res.type === "opaqueredirect" || res.status === 401 || res.status === 403)) { location.reload(); return; }
+    const r = res ? await res.json().catch(() => null) : null;   // offline for a moment: keep trying
     if (token !== pollToken) return;
     if (r && r.type !== "running") { show(r); return; }
     if (r && r.lines && r.lines.length) { view.live = r.lines; render(); }   // output so far

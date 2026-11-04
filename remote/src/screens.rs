@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const UPDATE: &str = "/usr/local/sbin/nas-remote-update";
 const AUDIT_REPORT: &str = "/var/lib/claude-audit/report";
-const SIGN_OUT_URL: &str = "https://auth.joe-nas.net/logout?rd=https%3A%2F%2Fremote.joe-nas.net%2F";
+const SIGN_OUT_URL: &str = "https://remote.joe-nas.net/auth/logout?rd=https%3A%2F%2Fremote.joe-nas.net%2F";
 /// These share gluetun's network: restart gluetun first, then the rest (see joe-nas skill).
 const GLUETUN_STACK: [&str; 4] = ["gluetun", "qbittorrent", "portmanager", "librewolf"];
 

@@ -1,9 +1,11 @@
 # Authelia for joe-nas: one user (joseph), passkey login, protecting
-# remote.joe-nas.net. Installed as /opt/docker/compose/authelia/config/configuration.yml.
+# remote.joe-nas.net. It is served at remote.joe-nas.net/auth (same origin as
+# the remote, so the iPhone home-screen app stays fullscreen through the login).
+# Installed as /opt/docker/compose/authelia/config/configuration.yml.
 theme: dark
 
 server:
-  address: 'tcp://:9091/'
+  address: 'tcp://:9091/auth'
 
 log:
   level: info
@@ -43,8 +45,8 @@ access_control:
 
 session:
   cookies:
-    - domain: joe-nas.net
-      authelia_url: https://auth.joe-nas.net
+    - domain: remote.joe-nas.net
+      authelia_url: https://remote.joe-nas.net/auth
       default_redirection_url: https://remote.joe-nas.net
       expiration: 1h
       inactivity: 15m

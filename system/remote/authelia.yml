@@ -1,4 +1,4 @@
-# OMV compose file "authelia": the passkey login (auth.joe-nas.net) in front
+# OMV compose file "authelia": the passkey login (remote.joe-nas.net/auth) in front
 # of the web remote. Config, secrets and its database live in this stack's
 # folder (/opt/docker/compose/authelia/config), which claude can't read.
 services:

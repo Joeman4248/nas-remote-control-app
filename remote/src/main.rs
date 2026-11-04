@@ -69,7 +69,7 @@ fn handle(stream: TcpStream, app: &screens::App, user: &str) {
     };
     // Only through Authelia: Caddy sets Remote-User after a passkey login.
     if req.header("remote-user") != Some(user) {
-        return http::respond(&stream, "403 Forbidden", "text/plain", b"sign in at auth.joe-nas.net");
+        return http::respond(&stream, "403 Forbidden", "text/plain", b"sign in at remote.joe-nas.net/auth");
     }
     let reply = match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => return http::respond(&stream, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
