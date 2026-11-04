@@ -3,7 +3,8 @@
 # only joseph's reviewed install puts them in effect.
 #
 # Each [[button]]:
-#   screen   which screen it's on: main, docker_all, container, packages, vpn, claude_remote
+#   screen   which screen it's on: main, docker_all, container, packages, vpn, claude_remote,
+#            backups, backup_usb, backup_local, backup_r2
 #   label    the text on the button
 #   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
 #   when     only show it when: "stopped" (container), "reboot_needed" (packages)
@@ -13,6 +14,7 @@
 #            allow exactly this command, or it fails with "a password is required".
 #   wait     the message while it runs
 #   show     "output" (default), "total" (only lines starting with "Total")
+#   done     the message when the command prints nothing
 #   does     instead of run: a flow built into the apps (open_docker,
 #            update_stack, restart_all, ...), where the confirm text can use
 #            {count}, {targets}, {project}, {list}
@@ -49,6 +51,11 @@ screen = "main"
 label = "Disk Health"
 does = "disk_health"
 wait = "Reading SMART data..."
+
+[[button]]
+screen = "main"
+label = "Backups"
+does = "open_backups"
 
 [[button]]
 screen = "main"
@@ -106,6 +113,95 @@ confirm = ["Restart Remote Control?", "This ends every running claude session,",
            "including one you're talking to now."]
 yes = "Restart"
 wait = "Restarting Remote Control..."
+
+# ---- Backups (restic: usb-backup, r2-backup) ----
+# The checks go through backup-verify (read-only: it can't restore, forget or prune).
+
+[[button]]
+screen = "backups"
+label = "Logs"
+run = ["journalctl", "-u", "r2-backup", "-u", "usb-backup", "-n", "40", "-o", "short-iso", "--no-pager"]
+wait = "Fetching logs..."
+
+[[button]]
+screen = "backup_usb"
+label = "Snapshots"
+run = ["/usr/local/sbin/backup-verify", "usb", "snapshots"]
+wait = "Reading the USB SSD..."
+
+[[button]]
+screen = "backup_usb"
+label = "Check"
+run = ["/usr/local/sbin/backup-verify", "usb", "check"]
+wait = "Checking the repository..."
+
+[[button]]
+screen = "backup_usb"
+label = "Check Data"
+run = ["/usr/local/sbin/backup-verify", "usb", "check-data"]
+confirm = ["Read back every file in the USB backup?", "Takes several minutes; the result shows here",
+           "if you keep this page open."]
+yes = "Check"
+wait = "Reading back the whole backup..."
+
+[[button]]
+screen = "backup_usb"
+label = "Back Up Now"
+style = "GOOD"
+run = ["systemctl", "start", "--no-block", "usb-backup"]
+confirm = ["Snapshot the OS drive to the USB SSD now?", "Runs in the background (a few minutes)."]
+yes = "Back Up"
+done = "Started. Backups shows it running."
+
+[[button]]
+screen = "backup_local"
+label = "Snapshots"
+run = ["/usr/local/sbin/backup-verify", "local", "snapshots"]
+wait = "Reading the local repository..."
+
+[[button]]
+screen = "backup_local"
+label = "Check"
+run = ["/usr/local/sbin/backup-verify", "local", "check"]
+wait = "Checking the repository..."
+
+[[button]]
+screen = "backup_local"
+label = "Check Data"
+run = ["/usr/local/sbin/backup-verify", "local", "check-data"]
+confirm = ["Read back every file in the local backup?"]
+yes = "Check"
+wait = "Reading back the whole backup..."
+
+[[button]]
+screen = "backup_local"
+label = "Back Up Now"
+style = "GOOD"
+run = ["systemctl", "start", "--no-block", "r2-backup"]
+confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in the background."]
+yes = "Back Up"
+done = "Started. Backups shows it running."
+
+[[button]]
+screen = "backup_r2"
+label = "Snapshots"
+run = ["/usr/local/sbin/backup-verify", "r2", "snapshots"]
+wait = "Asking R2..."
+
+[[button]]
+screen = "backup_r2"
+label = "Check"
+run = ["/usr/local/sbin/backup-verify", "r2", "check"]
+wait = "Checking the repository..."
+
+[[button]]
+screen = "backup_r2"
+label = "Back Up Now"
+style = "GOOD"
+run = ["systemctl", "start", "--no-block", "r2-backup"]
+confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in the background."]
+yes = "Back Up"
+done = "Started. Backups shows it running."
 
 # ---- Docker › All ----
 

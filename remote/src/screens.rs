@@ -258,6 +258,58 @@ fn claude_version() -> String {
         .unwrap_or_else(|| "?".into())
 }
 
+/// The restic repositories: (id for backup-verify, button name, what the screen says).
+/// Their buttons are on screens backup_<id> in buttons.toml.
+const BACKUP_REPOS: [(&str, &str, &[&str]); 3] = [
+    ("usb", "USB SSD", &["The whole OS drive (NVMe): /, /boot/efi and the", "disk layout. usb-backup, nightly 04:07.",
+                         "On the USB SSD nas-backup, restic-os.", "Keeps 14 daily, 8 weekly, 12 monthly."]),
+    ("local", "Local", &["Compose files, app settings and databases.", "r2-backup, nightly 03:17, with R2.",
+                         "/var/backups/restic-local on the NVMe."]),
+    ("r2", "R2", &["Same as Local, off-site in Cloudflare R2.", "r2-backup, nightly 03:17.",
+                   "No Check Data here: it would download everything."]),
+];
+const USB_BACKUP_UUID: &str = "f728a9c8-1c4b-4cfc-a444-4b12fee86ffb";
+
+/// Last run and next run of the two backup services, and the USB drive. Needs no sudo.
+fn backup_lines() -> Vec<Value> {
+    let timers: Vec<Value> = serde_json::from_str(&plain(&["systemctl", "list-timers", "r2-backup.timer", "usb-backup.timer", "-o", "json"]))
+        .unwrap_or_default();
+    let t = now();
+    let mut out = vec![];
+    for (unit, name) in [("r2-backup", "R2 + Local"), ("usb-backup", "USB SSD")] {
+        let s = plain(&["systemctl", "show", unit, "--timestamp=unix", "-p", "ActiveState", "-p", "Result",
+                        "-p", "ExecMainStatus", "-p", "ExecMainStartTimestamp", "-p", "ExecMainExitTimestamp",
+                        "-p", "ConditionResult", "-p", "ConditionTimestamp"]);
+        let get = |k: &str| s.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").to_string();
+        let ts = |k: &str| get(k).trim_start_matches('@').parse::<u64>().unwrap_or(0);
+        let (start, exit, cond) = (ts("ExecMainStartTimestamp="), ts("ExecMainExitTimestamp="), ts("ConditionTimestamp="));
+        let (text, colour) = if get("ActiveState=") == "activating" {
+            (format!("running for {}", age(t.saturating_sub(start))), "")
+        } else if get("ConditionResult=") == "no" && cond > 0 {
+            (format!("skipped {} ago (drive not mounted)", age(t.saturating_sub(cond))), "red")
+        } else if start == 0 {
+            ("no run since boot".into(), "dim")
+        } else if get("Result=") != "success" {
+            (format!("FAILED {} ago (exit {})", age(t.saturating_sub(exit.max(start))), get("ExecMainStatus=")), "red")
+        } else {
+            (format!("ok {} ago, took {}", age(t.saturating_sub(exit)), age(exit.saturating_sub(start))), "green")
+        };
+        out.push(line(format!("{name}: {text}"), colour));
+        if unit == "usb-backup" {
+            let mnt = plain(&["findmnt", "-rn", "-S", &format!("UUID={USB_BACKUP_UUID}"), "-o", "AVAIL,SIZE"]);
+            out.push(match mnt.split_whitespace().collect::<Vec<_>>().as_slice() {
+                [avail, size] => line(format!("  drive plugged in, {avail} free of {size}"), "dim"),
+                _ => line("  drive not plugged in (or not mounted)", "red"),
+            });
+        }
+        let next = timers.iter().find(|x| x["unit"] == format!("{unit}.timer")).and_then(|x| x["next"].as_u64()).unwrap_or(0);
+        out.push(line(if next == 0 { "  next run: not scheduled".to_string() } else {
+            format!("  next run in {}", age((next / 1_000_000).saturating_sub(t)))
+        }, if next == 0 { "red" } else { "dim" }));
+    }
+    out
+}
+
 /// SMART summary per drive, plus the array and the SSD cache.
 fn disk_health() -> Vec<Value> {
     let mut out = vec![];
@@ -413,6 +465,8 @@ impl App {
             ["open", "audit"] => audit_screen(),
             ["open", "vpn"] => self.vpn_screen(),
             ["open", "claude_remote"] => self.claude_remote_screen(),
+            ["open", "backups"] => self.backups_screen(),
+            ["open", "backup", repo] => self.backup_repo_screen(repo),
             ["btn", i, arg] => match i.parse::<usize>().ok().and_then(|i| self.cfg.buttons.get(i).map(|b| (i, b))) {
                 Some((i, b)) => self.press(i, b, arg, confirmed),
                 _ => result("Error", vec![line("No such button.", "red")]),
@@ -564,6 +618,22 @@ impl App {
         screen("open:claude_remote", "Claude Remote", lines, buttons, Some("Back"))
     }
 
+    fn backups_screen(&self) -> Value {
+        let mut buttons: Vec<Value> = BACKUP_REPOS.iter()
+            .map(|(r, name, ..)| button(name, "BTN", format!("open:backup:{r}"))).collect();
+        buttons.extend(self.buttons("backups", "", |_| true));
+        screen("open:backups", "Backups", backup_lines(), buttons, Some("Back"))
+    }
+
+    fn backup_repo_screen(&self, repo: &str) -> Value {
+        let Some((r, name, what)) = BACKUP_REPOS.iter().find(|(r, ..)| *r == repo) else {
+            return result("Backups", vec![line(format!("No backup named {repo:?}."), "red")]);
+        };
+        let lines = what.iter().map(|l| line(*l, "")).collect();
+        screen(&format!("open:backup:{r}"), &format!("Backups › {name}"), lines,
+               self.buttons(&format!("backup_{r}"), "", |_| true), Some("Back"))
+    }
+
     fn packages_screen(&self) -> Value {
         let pk = upgradable();
         let mut lines = if pk.is_empty() {
@@ -679,6 +749,9 @@ impl App {
             "claude_remote" => "Claude Remote".into(),
             "docker_all" => "Docker › All".into(),
             "packages" => "Packages".into(),
+            "backups" => "Backups".into(),
+            s if s.starts_with("backup_") => BACKUP_REPOS.iter().find(|(r, ..)| s[7..] == **r)
+                .map(|(_, n, _)| format!("Backups › {n}")).unwrap_or_else(|| b.label.clone()),
             _ => b.label.clone(),
         };
         if (b.screen == "container" || !arg.is_empty()) && !containers().iter().any(|c| c.name == arg) {
@@ -706,11 +779,15 @@ impl App {
             }
             let cmd: Vec<String> = b.run.iter().map(|a| fill(a, &[("name", arg)])).collect();
             let (show_total, t) = (b.show.as_deref() == Some("total"), title.clone());
+            let done = b.done.clone();
             return job(b.wait.as_deref().unwrap_or("Working..."), Box::new(move || {
                 let args: Vec<&str> = cmd.iter().map(String::as_str).collect();
                 let out = sh(&args);
                 let total: Vec<Value> = out.lines().filter(|l| l.starts_with("Total")).map(|l| line(l, "")).collect();
-                result(&t, if show_total && !total.is_empty() { total } else { plain_lines(&out) })
+                match &done {
+                    Some(d) if out.is_empty() => result(&t, vec![line(d.as_str(), "green")]),
+                    _ => result(&t, if show_total && !total.is_empty() { total } else { plain_lines(&out) }),
+                }
             }));
         };
 
@@ -721,6 +798,7 @@ impl App {
             "open_audit" => audit_screen(),
             "open_vpn" => self.vpn_screen(),
             "open_claude_remote" => self.claude_remote_screen(),
+            "open_backups" => self.backups_screen(),
             "remote_control_pane" => result(&title, remote_control_pane().iter().map(|l| line(l.as_str(), "")).collect()),
             "disk_health" => job(b.wait.as_deref().unwrap_or("Working..."), Box::new(move || result(&t, disk_health()))),
             "grant" => self.grant_screen(),
