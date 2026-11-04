@@ -7,7 +7,7 @@
 #            backups, backup_usb, backup_local, backup_r2
 #   label    the text on the button
 #   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
-#   when     only show it when: "stopped" (container), "reboot_needed" (packages),
+#   when     only show it when: "stopped" or "running" (container), "reboot_needed" (packages),
 #            "idle" (backup_*: its backup isn't running)
 #   confirm  lines for a Yes/No screen first; "yes" labels the Yes button
 #   run      a command, run with sudo; {name} is the container on its page.
@@ -303,6 +303,16 @@ style = "GOOD"
 when = "stopped"
 run = ["docker", "start", "{name}"]
 wait = "Starting..."
+
+[[button]]
+screen = "container"
+label = "Stop"
+style = "DANGER"
+when = "running"
+does = "stop_container"
+confirm = ["Stop {targets}?", "It stays stopped until you start it (or the NAS reboots",
+           "and its restart policy brings it back)."]
+yes = "Stop"
 
 # ---- Packages ----
 

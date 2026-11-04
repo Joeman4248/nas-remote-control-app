@@ -5,7 +5,7 @@ Defaults:nasremote !requiretty, env_keep += "DEBIAN_FRONTEND RESTIC_PROGRESS_FPS
 
 Cmnd_Alias NR_DOCKER = /usr/bin/docker ps -a --format *, /usr/bin/docker inspect -f *, \
                        /usr/bin/docker logs --tail 60 *, /usr/bin/docker restart *, \
-                       /usr/bin/docker start *, /usr/bin/docker image prune -f, \
+                       /usr/bin/docker start *, /usr/bin/docker stop *, /usr/bin/docker image prune -f, \
                        /usr/bin/docker image prune -f -a, /usr/bin/docker system df, \
                        /usr/bin/docker logs --tail 5000 gluetun
 Cmnd_Alias NR_DISKS  = /usr/sbin/smartctl -i -H -A /dev/sd?, /usr/sbin/smartctl -i -H -A /dev/nvme?n?

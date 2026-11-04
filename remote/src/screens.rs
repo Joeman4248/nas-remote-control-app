@@ -76,9 +76,17 @@ pub struct Container {
     pub name: String,
     pub status: String,
     pub healthy: bool,
+    /// exited or never started: fine, some stacks are off on purpose
+    pub stopped: bool,
 }
 
-/// All containers, problems first.
+impl Container {
+    pub fn problem(&self) -> bool {
+        !self.healthy && !self.stopped
+    }
+}
+
+/// All containers: problems first, then running, then stopped.
 pub fn containers() -> Vec<Container> {
     let mut rows: Vec<Container> = sh(&["docker", "ps", "-a", "--format", "{{.Names}}|{{.Status}}"])
         .lines()
@@ -87,10 +95,11 @@ pub fn containers() -> Vec<Container> {
             // "Up 2 hours" or "Up 2 hours (healthy)"; anything else in brackets is a problem
             let rest = status.strip_suffix("(healthy)").unwrap_or(status);
             let healthy = status.starts_with("Up ") && !rest.contains('(');
-            Container { name: name.into(), status: status.into(), healthy }
+            let stopped = status.starts_with("Exited") || status.starts_with("Created");
+            Container { name: name.into(), status: status.into(), healthy, stopped }
         })
         .collect();
-    rows.sort_by(|a, b| (a.healthy, &a.name).cmp(&(b.healthy, &b.name)));
+    rows.sort_by(|a, b| (!a.problem(), a.stopped, &a.name).cmp(&(!b.problem(), b.stopped, &b.name)));
     rows
 }
 
@@ -164,8 +173,11 @@ pub fn header() -> Value {
         None => line("audit: ?", "red"),
     };
     let c = containers();
-    let up = c.iter().filter(|c| c.healthy).count();
-    let mut parts = vec![audit, line(format!("docker {up}/{}", c.len()), if up == c.len() { "green" } else { "red" })];
+    // stopped containers don't count: only running ones that aren't healthy
+    let (up, off) = (c.iter().filter(|c| c.healthy).count(), c.iter().filter(|c| c.stopped).count());
+    let ok = !c.iter().any(Container::problem);
+    let docker = format!("docker {up}/{}{}", c.len() - off, if off > 0 { format!(" · {off} off") } else { String::new() });
+    let mut parts = vec![audit, line(docker, if ok { "green" } else { "red" })];
     parts.extend(alerts().into_iter().map(|a| line(a, "red")));
     json!(parts)
 }
@@ -565,7 +577,8 @@ impl App {
     fn docker_screen(&self) -> Value {
         let mut buttons = vec![button("All", "BTN", "open:docker_all".into())];
         buttons.extend(containers().iter().map(|c| {
-            button(&c.name, if c.healthy { "GOOD" } else { "BAD" }, format!("open:container:{}", c.name))
+            let style = if c.healthy { "GOOD" } else if c.stopped { "OFF" } else { "BAD" };
+            button(&c.name, style, format!("open:container:{}", c.name))
         }));
         screen("open:docker", "Docker", vec![], buttons, Some("Back"))
     }
@@ -598,8 +611,10 @@ impl App {
             return result(name, vec![line(format!("{name} not found"), "red")]);
         };
         let good = *state == "running" && (health.is_empty() || *health == "healthy");
+        let stopped = matches!(*state, "exited" | "created");
+        let colour = if good { "green" } else if stopped { "dim" } else { "red" };
         let mut lines = vec![
-            line(if health.is_empty() { state.to_string() } else { format!("{state} · {health}") }, if good { "green" } else { "red" }),
+            line(if health.is_empty() { state.to_string() } else { format!("{state} · {health}") }, colour),
             line(format!("since {} UTC", started.get(..16).unwrap_or(started).replace('T', " ")), ""),
             line(if version.is_empty() { image.to_string() } else { format!("{image}  ({version})") }, ""),
         ];
@@ -610,8 +625,7 @@ impl App {
                 line("whole VPN stack, gluetun first.", ""),
             ]);
         }
-        let stopped = *state != "running";
-        let buttons = self.buttons("container", name, |w| w == "stopped" && stopped);
+        let buttons = self.buttons("container", name, |w| if w == "running" { !stopped } else { w == "stopped" && stopped });
         screen(&act, name, lines, buttons, Some("Back"))
     }
 
@@ -919,6 +933,21 @@ impl App {
                 };
                 ask(&[("targets", &targets.join(", "))], vec![])
                     .unwrap_or_else(|| job("Restarting...", Box::new(move || restart(t, targets))))
+            }
+            "stop_container" => {
+                // stopping gluetun takes its network away: stop the stack, gluetun last
+                let targets: Vec<String> = if arg == "gluetun" {
+                    GLUETUN_STACK.iter().rev().map(|s| s.to_string()).collect()
+                } else {
+                    vec![arg.to_string()]
+                };
+                ask(&[("targets", &targets.join(", "))], vec![]).unwrap_or_else(|| {
+                    job("Stopping...", Box::new(move || {
+                        let mut cmd = vec!["docker", "stop"];
+                        cmd.extend(targets.iter().map(String::as_str));
+                        result(&t, plain_lines(&sh(&cmd)))
+                    }))
+                })
             }
             "restart_all" => {
                 let running: Vec<String> = containers().into_iter().filter(|c| c.status.starts_with("Up")).map(|c| c.name).collect();
