@@ -60,6 +60,26 @@ does = "open_backups"
 
 [[button]]
 screen = "main"
+label = "Drives"
+run = ["/usr/local/sbin/nas-drive", "status"]
+
+[[button]]
+screen = "main"
+label = "Mount Drives"
+style = "GOOD"
+run = ["/usr/local/sbin/nas-drive", "mount"]
+wait = "Mounting USB drives..."
+
+[[button]]
+screen = "main"
+label = "Eject Drives"
+run = ["/usr/local/sbin/nas-drive", "eject"]
+confirm = ["Unmount every USB drive and power it off?", "Unplug after it says it's safe."]
+yes = "Eject"
+wait = "Ejecting..."
+
+[[button]]
+screen = "main"
 label = "VPN"
 does = "open_vpn"
 

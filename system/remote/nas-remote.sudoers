@@ -40,11 +40,12 @@ Cmnd_Alias NR_GRANT  = /usr/local/sbin/claude-elevate 10 read, /usr/local/sbin/c
                        /usr/local/sbin/claude-elevate 30 disks, /usr/local/sbin/claude-elevate 60 disks, \
                        /usr/local/sbin/claude-elevate 15 full, /usr/local/sbin/claude-elevate 30 full
 Cmnd_Alias NR_AUDIT  = /usr/local/sbin/claude-audit --accept
+Cmnd_Alias NR_DRIVE  = /usr/local/sbin/nas-drive status, /usr/local/sbin/nas-drive mount, /usr/local/sbin/nas-drive eject
 Cmnd_Alias NR_STEAM  = /usr/local/sbin/steam-mode stream, /usr/local/sbin/steam-mode monitor
 # Update app: show the diff, then (after the remote's Face ID check) install exactly that copy.
 Cmnd_Alias NR_SELF   = /usr/local/sbin/nas-remote-update --stage, /usr/local/sbin/nas-remote-update --apply *
 
-nasremote ALL=(root) NOPASSWD: NR_DOCKER, NR_DISKS, NR_UPDATE, NR_APT, NR_SYS, NR_BACKUP, NR_GRANT, NR_AUDIT, NR_STEAM, NR_SELF
+nasremote ALL=(root) NOPASSWD: NR_DOCKER, NR_DISKS, NR_UPDATE, NR_APT, NR_SYS, NR_BACKUP, NR_GRANT, NR_AUDIT, NR_STEAM, NR_DRIVE, NR_SELF
 
 # Claude remote › Show screen: read (never type into) Remote Control's tmux window, as claude.
 nasremote ALL=(claude) NOPASSWD: /usr/bin/tmux capture-pane -p -J -t claude
