@@ -4,14 +4,16 @@
 #
 # Each [[button]]:
 #   screen   which screen it's on: main, docker_all, container, packages, vpn, claude_remote,
-#            backups, backup_usb, backup_local, backup_r2
+#            backups, backup_usb, backup_local, backup_r2, drives, drive
 #   label    the text on the button
 #   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
 #   when     only show it when: "stopped" or "running" (container), "reboot_needed" (packages),
 #            "steam_stream" / "steam_monitor" / "steam_off" (main: which Steam container runs),
-#            "idle" (backup_*: its backup isn't running)
+#            "idle" (backup_*: its backup isn't running),
+#            "any_mounted" / "any_unmounted" (drives), "mounted" / "unmounted" (drive)
 #   confirm  lines for a Yes/No screen first; "yes" labels the Yes button
-#   run      a command, run with sudo; {name} is the container on its page.
+#   run      a command, run with sudo; {name} is the container on its page,
+#            or the drive's device (/dev/sdX1) on a drive page ({label} = its name).
 #            The web remote's sudoers (system/remote/nas-remote.sudoers) must
 #            allow exactly this command, or it fails with "a password is required".
 #   wait     the message while it runs
@@ -49,34 +51,13 @@ does = "open_docker"
 
 [[button]]
 screen = "main"
-label = "Disk Health"
-does = "disk_health"
-wait = "Reading SMART data..."
-
-[[button]]
-screen = "main"
 label = "Backups"
 does = "open_backups"
 
 [[button]]
 screen = "main"
 label = "Drives"
-run = ["/usr/local/sbin/nas-drive", "status"]
-
-[[button]]
-screen = "main"
-label = "Mount Drives"
-style = "GOOD"
-run = ["/usr/local/sbin/nas-drive", "mount"]
-wait = "Mounting USB drives..."
-
-[[button]]
-screen = "main"
-label = "Eject Drives"
-run = ["/usr/local/sbin/nas-drive", "eject"]
-confirm = ["Unmount every USB drive and power it off?", "Unplug after it says it's safe."]
-yes = "Eject"
-wait = "Ejecting..."
+does = "open_drives"
 
 [[button]]
 screen = "main"
@@ -380,3 +361,44 @@ when = "reboot_needed"
 does = "reboot"
 confirm = ["Reboot the NAS now? Plex, downloads and this", "session drop; back in a few minutes."]
 yes = "Reboot"
+
+# ---- Drives (USB, via nas-drive; the drive list itself is built in the app) ----
+[[button]]
+screen = "drives"
+label = "Mount All"
+style = "GOOD"
+when = "any_unmounted"
+run = ["/usr/local/sbin/nas-drive", "mount"]
+wait = "Mounting USB drives..."
+
+[[button]]
+screen = "drives"
+label = "Eject All"
+when = "any_mounted"
+run = ["/usr/local/sbin/nas-drive", "eject"]
+confirm = ["Unmount every USB drive and power it off?", "Unplug after it says it's safe."]
+yes = "Eject"
+wait = "Ejecting..."
+
+[[button]]
+screen = "drives"
+label = "Disk Health"
+does = "disk_health"
+wait = "Reading SMART data..."
+
+[[button]]
+screen = "drive"
+label = "Mount"
+style = "GOOD"
+when = "unmounted"
+run = ["/usr/local/sbin/nas-drive", "mount", "{name}"]
+wait = "Mounting..."
+
+[[button]]
+screen = "drive"
+label = "Eject"
+when = "mounted"
+run = ["/usr/local/sbin/nas-drive", "eject", "{name}"]
+confirm = ["Unmount {label} and power the disk off?", "Other partitions on the same disk stay mounted."]
+yes = "Eject"
+wait = "Ejecting..."

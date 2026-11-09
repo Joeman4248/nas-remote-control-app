@@ -418,6 +418,40 @@ fn disk_health() -> Vec<Value> {
     out
 }
 
+/// A filesystem on a USB disk: what nas-drive mounts and ejects (never the array or the NVMe).
+struct UsbPart {
+    dev: String,
+    name: String,
+    fs: String,
+    size: String,
+    mnt: Option<String>,
+}
+
+impl UsbPart {
+    fn free(&self) -> Option<String> {
+        let m = self.mnt.as_deref()?;
+        Some(plain(&["df", "-h", "--output=avail", m]).lines().nth(1).unwrap_or("?").trim().to_string())
+    }
+}
+
+fn usb_parts() -> Vec<UsbPart> {
+    // a flat list (no NAME column = no tree): partitions point at their disk through pkname
+    let v: Value = serde_json::from_str(&plain(&["lsblk", "-Jpo", "PATH,PKNAME,TRAN,FSTYPE,LABEL,SIZE,MOUNTPOINT"])).unwrap_or_default();
+    let all = v["blockdevices"].as_array().cloned().unwrap_or_default();
+    let usb: Vec<&Value> = all.iter().filter(|d| d["tran"] == "usb").map(|d| &d["path"]).collect();
+    all.iter()
+        .filter(|d| usb.contains(&&d["path"]) || usb.contains(&&d["pkname"]))
+        .filter_map(|d| {
+            let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
+            let (fs, dev, label) = (s("fstype"), s("path"), s("label"));
+            (!fs.is_empty() && fs != "swap").then(|| UsbPart {
+                name: if label.is_empty() { dev.trim_start_matches("/dev/").to_string() } else { label },
+                dev, fs, size: s("size"), mnt: d["mountpoint"].as_str().map(String::from),
+            })
+        })
+        .collect()
+}
+
 fn container_ids() -> Vec<(String, String)> {
     sh(&["docker", "ps", "-a", "--format", "{{.Names}}|{{.ID}}"])
         .lines()
@@ -546,6 +580,8 @@ impl App {
             ["open", "vpn"] => self.vpn_screen(),
             ["open", "claude_remote"] => self.claude_remote_screen(),
             ["open", "backups"] => self.backups_screen(),
+            ["open", "drives"] => self.drives_screen(),
+            ["open", "drive", dev] => self.drive_screen(dev),
             ["open", "backup", repo] => self.backup_repo_screen(repo),
             ["watch", unit] => self.watch(unit),
             ["btn", i, arg] => match i.parse::<usize>().ok().and_then(|i| self.cfg.buttons.get(i).map(|b| (i, b))) {
@@ -635,6 +671,44 @@ impl App {
         }
         let buttons = self.buttons("container", name, |w| if w == "running" { !stopped } else { w == "stopped" && stopped });
         screen(&act, name, lines, buttons, Some("Back"))
+    }
+
+    fn drives_screen(&self) -> Value {
+        let parts = usb_parts();
+        let mut lines: Vec<Value> = parts.iter().map(|p| {
+            let state = p.free().map_or("not mounted".into(), |f| format!("{f} free"));
+            line(format!("{}  {} {}  {state}", p.name, p.size, p.fs), if p.mnt.is_some() { "green" } else { "" })
+        }).collect();
+        if lines.is_empty() {
+            lines.push(line("No USB drives plugged in.", "dim"));
+        }
+        let mut buttons: Vec<Value> = parts.iter()
+            .map(|p| button(&p.name, if p.mnt.is_some() { "GOOD" } else { "OFF" }, format!("open:drive:{}", p.dev)))
+            .collect();
+        let (any_mounted, any_unmounted) = (parts.iter().any(|p| p.mnt.is_some()), parts.iter().any(|p| p.mnt.is_none()));
+        buttons.extend(self.buttons("drives", "", |w| match w {
+            "any_mounted" => any_mounted,
+            "any_unmounted" => any_unmounted,
+            _ => true,
+        }));
+        screen("open:drives", "Drives", lines, buttons, Some("Back"))
+    }
+
+    fn drive_screen(&self, dev: &str) -> Value {
+        // gone (ejected or unplugged): back to the list
+        let Some(p) = usb_parts().into_iter().find(|p| p.dev == dev) else {
+            return self.drives_screen();
+        };
+        let mounted = p.mnt.is_some();
+        let lines = vec![
+            match (&p.mnt, p.free()) {
+                (Some(m), Some(f)) => line(format!("mounted at {m} ({f} free)"), "green"),
+                _ => line("not mounted", "dim"),
+            },
+            line(format!("{} · {} · {}", p.size, p.fs, p.dev), ""),
+        ];
+        let buttons = self.buttons("drive", dev, |w| if w == "mounted" { mounted } else { w == "unmounted" && !mounted });
+        screen(&format!("open:drive:{dev}"), &format!("Drives › {}", p.name), lines, buttons, Some("Back"))
     }
 
     fn vpn_screen(&self) -> Value {
@@ -857,11 +931,22 @@ impl App {
             "docker_all" => "Docker › All".into(),
             "packages" => "Packages".into(),
             "backups" => "Backups".into(),
+            "drives" => "Drives".into(),
             s if s.starts_with("backup_") => BACKUP_REPOS.iter().find(|(r, ..)| s[7..] == **r)
                 .map(|(_, n, _)| format!("Backups › {n}")).unwrap_or_else(|| b.label.clone()),
             _ => b.label.clone(),
         };
-        if (b.screen == "container" || !arg.is_empty()) && !containers().iter().any(|c| c.name == arg) {
+        // a drive button names its USB partition; it must still be one
+        let label = if b.screen == "drive" {
+            match usb_parts().into_iter().find(|p| p.dev == arg) {
+                Some(p) => p.name,
+                None => return result("Drives", vec![line(format!("No USB drive at {arg:?} any more."), "red")]),
+            }
+        } else {
+            String::new()
+        };
+        let title = if label.is_empty() { title } else { format!("Drives › {label}") };
+        if b.screen != "drive" && (b.screen == "container" || !arg.is_empty()) && !containers().iter().any(|c| c.name == arg) {
             return result(&title, vec![line(format!("No container named {arg:?}."), "red")]);
         }
         // the page may be older than the backup's start
@@ -891,7 +976,7 @@ impl App {
 
         let Some(does) = b.does.as_deref() else {
             // a plain command from buttons.toml
-            if let Some(q) = ask(&[("name", arg)], vec![]) {
+            if let Some(q) = ask(&[("name", arg), ("label", &label)], vec![]) {
                 return q;
             }
             let cmd: Vec<String> = b.run.iter().map(|a| fill(a, &[("name", arg)])).collect();
@@ -912,6 +997,7 @@ impl App {
             "open_vpn" => self.vpn_screen(),
             "open_claude_remote" => self.claude_remote_screen(),
             "open_backups" => self.backups_screen(),
+            "open_drives" => self.drives_screen(),
             "backup_now" => {
                 let unit = backup_unit(b.screen.strip_prefix("backup_").unwrap_or(""));
                 ask(&[], vec![]).unwrap_or_else(|| match sh(&["systemctl", "start", "--no-block", unit]) {
