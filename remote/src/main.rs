@@ -19,6 +19,7 @@ mod jobs;
 mod screens;
 mod sh;
 mod stepup;
+mod updates;
 
 use serde_json::{json, Value};
 use std::net::{TcpListener, TcpStream};
@@ -51,6 +52,7 @@ fn main() {
         return println!("{}: {} buttons, ok", buttons_path(), cfg.buttons.len());
     }
     let app = screens::App::new(cfg);
+    updates::start();
     let listener = TcpListener::bind(&addr).unwrap_or_else(|e| {
         eprintln!("nas-remote: can't listen on {addr}: {e}");
         std::process::exit(1)

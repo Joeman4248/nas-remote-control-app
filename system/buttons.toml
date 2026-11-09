@@ -9,7 +9,7 @@
 #   style    BTN (blue), DANGER (red), GOOD (green), BAD (red)
 #   when     only show it when: "stopped" or "running" (container), "reboot_needed" (packages),
 #            "steam_stream" / "steam_monitor" / "steam_off" (main: which Steam container runs),
-#            "idle" (backup_*: its backup isn't running),
+#            "idle" (backup_*: its backup isn't running), "updates" (docker_all: a check found some),
 #            "any_mounted" / "any_unmounted" (drives), "mounted" / "unmounted" (drive)
 #   confirm  lines for a Yes/No screen first; "yes" labels the Yes button
 #   run      a command, run with sudo; {name} is the container on its page,
@@ -243,6 +243,21 @@ confirm = ["Back up configs and app databases now?", "Writes to Local and R2, in
 yes = "Back Up"
 
 # ---- Docker › All ----
+
+[[button]]
+screen = "docker_all"
+label = "Check Updates"
+does = "check_images"
+wait = "Asking the registries..."
+
+[[button]]
+screen = "docker_all"
+label = "Update Available"
+style = "GOOD"
+when = "updates"
+does = "update_available"
+confirm = ["Update {list}?", "Pulls their new images and recreates {count} stack(s)."]
+yes = "Update"
 
 [[button]]
 screen = "docker_all"

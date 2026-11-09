@@ -15,6 +15,7 @@ use crate::config::{fill, Button, Config};
 use crate::jobs::{Jobs, Live};
 use crate::sh::{lines, plain, sh, sh_as, sh_live};
 use crate::stepup::{StepUp, RP_ID};
+use crate::updates::{self, State};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -452,6 +453,31 @@ fn usb_parts() -> Vec<UsbPart> {
         .collect()
 }
 
+/// "Updates: a, b (checked 2h 5m ago)" for the Docker screens, plus problems with the check.
+fn update_lines(full: bool) -> Vec<Value> {
+    let Some(r) = updates::latest() else {
+        return vec![line("Updates: not checked yet", "dim")];
+    };
+    let ago = format!("checked {} ago", age(now().saturating_sub(r.checked)));
+    let stale = r.stale();
+    let mut out = vec![if stale.is_empty() {
+        line(format!("No updates ({ago})"), "dim")
+    } else {
+        line(format!("{} with updates: {}", stale.len(), stale.join(", ")), "green")
+    }];
+    if !stale.is_empty() {
+        out.push(line(ago, "dim"));
+    }
+    if full {
+        for i in r.images.iter() {
+            if let State::Unknown(why) = &i.state {
+                out.push(line(format!("Can't check {}: {why}", i.containers.join(", ")), "dim"));
+            }
+        }
+    }
+    out
+}
+
 fn container_ids() -> Vec<(String, String)> {
     sh(&["docker", "ps", "-a", "--format", "{{.Names}}|{{.ID}}"])
         .lines()
@@ -619,12 +645,14 @@ impl App {
     }
 
     fn docker_screen(&self) -> Value {
+        let stale = updates::latest().map(|r| r.stale()).unwrap_or_default();
         let mut buttons = vec![button("All", "BTN", "open:docker_all".into())];
         buttons.extend(containers().iter().map(|c| {
             let style = if c.healthy { "GOOD" } else if c.stopped { "OFF" } else { "BAD" };
-            button(&c.name, style, format!("open:container:{}", c.name))
+            let label = if stale.contains(&c.name) { format!("{} ↑", c.name) } else { c.name.clone() };
+            button(&label, style, format!("open:container:{}", c.name))
         }));
-        screen("open:docker", "Docker", vec![], buttons, Some("Back"))
+        screen("open:docker", "Docker", update_lines(false), buttons, Some("Back"))
     }
 
     fn docker_all_screen(&self) -> Value {
@@ -637,7 +665,10 @@ impl App {
                 .filter(|l| l.starts_with("TYPE") || l.starts_with("Images") || l.starts_with("Containers"))
                 .map(|l| line(l, "")),
         );
-        screen("open:docker_all", "Docker › All", lines, self.buttons("docker_all", "", |_| true), Some("Back"))
+        lines.push(line("", ""));
+        lines.extend(update_lines(true));
+        let any = updates::latest().is_some_and(|r| !r.stale().is_empty());
+        screen("open:docker_all", "Docker › All", lines, self.buttons("docker_all", "", |w| w != "updates" || any), Some("Back"))
     }
 
     fn container_screen(&self, name: &str) -> Value {
@@ -662,6 +693,9 @@ impl App {
             line(format!("since {} UTC", started.get(..16).unwrap_or(started).replace('T', " ")), ""),
             line(if version.is_empty() { image.to_string() } else { format!("{image}  ({version})") }, ""),
         ];
+        if updates::latest().is_some_and(|r| r.stale().iter().any(|c| c == name)) {
+            lines.push(line("Update available", "green"));
+        }
         if GLUETUN_STACK.contains(&name) {
             lines.extend([
                 line("", ""),
@@ -1012,12 +1046,27 @@ impl App {
             "update_stack" => {
                 let p = compose_project(arg);
                 ask(&[("project", &p)], vec![])
-                    .unwrap_or_else(|| job("Updating...", Box::new(move || update_stacks(t, vec![p]))))
+                    .unwrap_or_else(|| job("Updating...", Box::new(move || { let r = update_stacks(t, vec![p]); updates::recheck_soon(); r })))
             }
             "update_all" => {
                 let stacks = compose_projects();
                 ask(&[("count", &stacks.len().to_string())], vec![])
-                    .unwrap_or_else(|| job("Updating every stack...", Box::new(move || update_stacks(t, stacks))))
+                    .unwrap_or_else(|| job("Updating every stack...", Box::new(move || { let r = update_stacks(t, stacks); updates::recheck_soon(); r })))
+            }
+            "check_images" => job(b.wait.as_deref().unwrap_or("Checking..."), Box::new(move || match updates::check() {
+                Some(_) => result(&t, update_lines(true)),
+                None => result(&t, vec![line("Couldn't list containers.", "red")]),
+            })),
+            "update_available" => {
+                let stale = updates::latest().map(|r| r.stale()).unwrap_or_default();
+                let mut stacks: Vec<String> = stale.iter().map(|c| compose_project(c)).filter(|p| !p.is_empty()).collect();
+                stacks.sort();
+                stacks.dedup();
+                if stacks.is_empty() {
+                    return result(&title, vec![line("Nothing to update (or not checked yet).", "dim")]);
+                }
+                ask(&[("list", &stale.join(", ")), ("count", &stacks.len().to_string())], vec![])
+                    .unwrap_or_else(|| job("Updating...", Box::new(move || { let r = update_stacks(t, stacks); updates::recheck_soon(); r })))
             }
             "restart_container" => {
                 let targets: Vec<String> = if GLUETUN_STACK.contains(&arg) {
